@@ -133,6 +133,68 @@ export class CorrelationEngine {
       });
     }
 
+    // Step 2b: Find rejected/unexecuted incidents
+    const executedSubmits = new Set<NormalizedEvent>();
+    for (const inc of incidents) {
+      const sub = inc.events.find((e) => e.eventType === 'ORDER_SUBMITTED');
+      if (sub) executedSubmits.add(sub);
+    }
+
+    const unexecutedSubmits = sortedEvents.filter(
+      (e) => e.eventType === 'ORDER_SUBMITTED' && !executedSubmits.has(e),
+    );
+
+    for (const submitEvent of unexecutedSubmits) {
+      const login = submitEvent.login;
+      const symbol = submitEvent.metadata.symbol || '';
+      const action = submitEvent.metadata.action || 'BUY';
+      const volume = submitEvent.metadata.volume || 0;
+      const submitTime = new Date(submitEvent.timestamp).getTime();
+      const orderId = submitEvent.metadata.orderId;
+      const ticketId = submitEvent.metadata.ticket || orderId || '';
+
+      // Find any rejection event within 15 seconds after submitTime
+      const rejectionEvent = sortedEvents.find((e) => {
+        if (e.eventType !== 'ORDER_REJECTED' && e.eventType !== 'DEALER_REJECTED') return false;
+        
+        const t = new Date(e.timestamp).getTime();
+        if (t < submitTime || t - submitTime > 15050) return false;
+
+        if (e.eventType === 'ORDER_REJECTED') {
+          return e.login === login;
+        } else { // DEALER_REJECTED
+          return e.metadata.symbol === symbol &&
+                 e.metadata.volume === volume &&
+                 e.metadata.action === action;
+        }
+      });
+
+      const relatedClientEvents: NormalizedEvent[] = [submitEvent];
+      
+      // Collect intermediate routed or accepted events
+      for (const e of sortedEvents) {
+        if (e.login === login && e !== submitEvent && e !== rejectionEvent) {
+          const t = new Date(e.timestamp).getTime();
+          if (t >= submitTime && t <= submitTime + 15000 && e.metadata.symbol === symbol) {
+            relatedClientEvents.push(e);
+          }
+        }
+      }
+
+      if (rejectionEvent) {
+        relatedClientEvents.push(rejectionEvent);
+      }
+
+      incidents.push({
+        ticketId,
+        login,
+        symbol,
+        action,
+        volume,
+        events: relatedClientEvents,
+      });
+    }
+
     // Step 3: Correlate dealer logs to active client incident sequences
     const dealerEvents = sortedEvents.filter(
       (e) => e.eventType === 'DEALER_ACCEPTED' || e.eventType === 'DEALER_REQUOTED',
@@ -148,13 +210,16 @@ export class CorrelationEngine {
 
         const submitEvent = incident.events.find((e) => e.eventType === 'ORDER_SUBMITTED');
         const execEvent = incident.events.find((e) => e.eventType === 'ORDER_EXECUTED');
+        const rejectEvent = incident.events.find((e) => e.eventType === 'ORDER_REJECTED' || e.eventType === 'DEALER_REJECTED');
         
-        if (!submitEvent || !execEvent) return false;
+        if (!submitEvent) return false;
 
         const submitTime = new Date(submitEvent.timestamp).getTime();
-        const execTime = new Date(execEvent.timestamp).getTime();
+        const endTime = execEvent 
+          ? new Date(execEvent.timestamp).getTime() 
+          : (rejectEvent ? new Date(rejectEvent.timestamp).getTime() : submitTime + 15000);
 
-        return dealerTime >= submitTime - 2000 && dealerTime <= execTime + 1000;
+        return dealerTime >= submitTime - 2000 && dealerTime <= endTime + 1000;
       });
 
       if (targetIncident) {

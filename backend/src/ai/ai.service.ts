@@ -149,30 +149,39 @@ Action: ${action}
 Volume: ${volume} Lot(s)
 
 Deterministic Metrics:
+- Trade Status: ${metrics.rejection?.isRejected ? 'REJECTED' : 'EXECUTED'}
 - Total Execution Duration: ${metrics.executionLatencyMs} ms
 - Dealer Queuing Delay: ${metrics.dealerLatencyMs} ms
 - Execution Slippage: ${metrics.slippagePips} pips (Price delta: ${metrics.priceDelta})
 - Requotes Count: ${metrics.requoteCount}
 - Retries Count: ${metrics.retryCount}
 - Manual Dealer ID: ${metrics.dealerId || 'N/A'}
+- Rejection Reason: ${metrics.rejection?.reason || 'N/A'}
+- Rejected By: ${metrics.rejection?.rejectedBy || 'N/A'}
+- Failed Stage: ${metrics.rejection?.failedStage || 'N/A'}
 
 Normalized Log Timeline:
 ${eventsFormatted}
 
 Analyze what occurred during this trade cycle. Identify if this is a Client, Dealer, Server, or Liquidity/Slippage issue.
 
+If the trade was rejected:
+Explain why it was rejected, which component (e.g. Server, Dealer Desk) rejected it, and list the evidence/logs supporting this.
+If the trade was executed successfully:
+Explain its execution pricing, slippage, and latencies.
+
 You MUST write your report using Markdown, strictly formatted with the following headers:
 ### Summary
 (High-level operational overview of the transaction)
 
 ### Root Cause
-(Detailed cause: e.g. dealer latency, market volatility slippage, manual dealer requotes)
+(Detailed cause: e.g. dealer latency, market volatility slippage, manual dealer requotes, insufficient margin rejection)
 
 ### Evidence
 (Bulleted list referencing timestamps, raw log outputs, and calculated metrics)
 
 ### Recommendation
-(Actions for support/risk desk: e.g., credit client's balance, reject claim because slippage matches quotes, check dealer performance)
+(Actions for support/risk desk: e.g., credit client's balance, reject claim because slippage matches quotes, check dealer performance, reject claim because margin was insufficient)
 
 ### Confidence
 [Low/Medium/High] with a one-sentence rationale.
@@ -187,6 +196,7 @@ You MUST write your report using Markdown, strictly formatted with the following
     volume: number,
     metrics: CalculatedMetrics,
   ): string {
+    const isRejected = metrics.rejection?.isRejected;
     const isNormal = metrics.isNormal;
     const hasSlippage = metrics.slippagePips > 0;
     const hasRequote = metrics.hasRequote;
@@ -198,7 +208,13 @@ You MUST write your report using Markdown, strictly formatted with the following
     let recommendation = '';
     let confidence = '### Confidence\nHigh. Simulated metrics show clear chronological milestones.';
 
-    if (isNormal) {
+    if (isRejected) {
+      const rej = metrics.rejection!;
+      summary = `Client ${login} placed a ${volume} Lot ${action} on ${symbol} (Ticket #${ticketId}), which was REJECTED. `;
+      rootCause = `The trade request failed during the "${rej.failedStage}" stage. It was rejected by ${rej.rejectedBy} due to: "${rej.reason}".`;
+      evidence = `- Rejection Stage: ${rej.failedStage}\n- Rejected By: ${rej.rejectedBy}\n- Mapped Reason: ${rej.reason}\n- Raw Log Reason: ${rej.rawReason || 'N/A'}\n- Latency to rejection: ${metrics.executionLatencyMs} ms`;
+      recommendation = `Inform the client that their trade was rejected due to ${(rej.reason || 'unknown reason').toLowerCase()}. No credit or adjustment is required.`;
+    } else if (isNormal) {
       summary += 'Execution was normal, fast, and completed without slippage.';
       rootCause = 'No issue identified. Order was processed within limits.';
       evidence = `- Total Latency: ${metrics.executionLatencyMs} ms (below standard 300ms threshold)\n- Slippage: 0.0 pips\n- Requotes: 0`;

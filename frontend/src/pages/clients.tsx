@@ -150,6 +150,7 @@ export default function ClientsPage() {
   }, [activeQuery]);
 
   const [tradeSearch, setTradeSearch] = useState('');
+  const [tradeTypeTab, setTradeTypeTab] = useState<'executed' | 'rejected'>('executed');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
 
@@ -209,15 +210,24 @@ export default function ClientsPage() {
     gcTime: 0,
   });
 
-  // Reset pagination on query or trades reload
+  // Reset pagination and tab on query or trades reload
   React.useEffect(() => {
     setCurrentPage(1);
     setTradeSearch('');
+    setTradeTypeTab('executed');
   }, [trades]);
 
   const filteredTrades = React.useMemo(() => {
     if (!trades) return [];
-    return trades.filter((t) => {
+    
+    // First, filter by Executed vs Rejected tab
+    const tabFiltered = trades.filter((t) => {
+      const isRejected = t.priceExecuted === 0 || t.priceExecuted === null || (t.comment && t.comment.toLowerCase().includes('reject'));
+      return tradeTypeTab === 'rejected' ? isRejected : !isRejected;
+    });
+
+    // Then, filter by keyword search
+    return tabFiltered.filter((t) => {
       const q = tradeSearch.toLowerCase().trim();
       if (!q) return true;
       return (
@@ -226,7 +236,7 @@ export default function ClientsPage() {
         (t.comment && t.comment.toLowerCase().includes(q))
       );
     });
-  }, [trades, tradeSearch]);
+  }, [trades, tradeSearch, tradeTypeTab]);
 
   const paginatedTrades = React.useMemo(() => {
     const start = (currentPage - 1) * pageSize;
@@ -422,6 +432,42 @@ export default function ClientsPage() {
               </div>
             </div>
 
+            {/* Tabs selector */}
+            <div className="flex border-b border-zinc-900 bg-zinc-950/20 px-5 gap-4">
+              <button
+                type="button"
+                onClick={() => { setTradeTypeTab('executed'); setCurrentPage(1); }}
+                className={`py-3 px-2 text-xs font-bold uppercase tracking-wider border-b-2 transition-all flex items-center gap-2 ${
+                  tradeTypeTab === 'executed'
+                    ? 'border-emerald-500 text-zinc-100 font-semibold'
+                    : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                <span>Executed Trades</span>
+                <span className={`rounded-full px-2 py-0.5 text-[9px] font-mono font-bold ${
+                  tradeTypeTab === 'executed' ? 'bg-emerald-950/30 text-emerald-400 border border-emerald-950/50' : 'bg-zinc-900 text-zinc-600'
+                }`}>
+                  {trades ? trades.filter(t => !(t.priceExecuted === 0 || t.priceExecuted === null || (t.comment && t.comment.toLowerCase().includes('reject')))).length : 0}
+                </span>
+              </button>
+              <button
+                type="button"
+                onClick={() => { setTradeTypeTab('rejected'); setCurrentPage(1); }}
+                className={`py-3 px-2 text-xs font-bold uppercase tracking-wider border-b-2 transition-all flex items-center gap-2 ${
+                  tradeTypeTab === 'rejected'
+                    ? 'border-red-500 text-zinc-100 font-semibold'
+                    : 'border-transparent text-zinc-500 hover:text-zinc-300'
+                }`}
+              >
+                <span>Rejected Trades</span>
+                <span className={`rounded-full px-2 py-0.5 text-[9px] font-mono font-bold ${
+                  tradeTypeTab === 'rejected' ? 'bg-red-950/30 text-red-400 border border-red-950/50' : 'bg-zinc-900 text-zinc-600'
+                }`}>
+                  {trades ? trades.filter(t => (t.priceExecuted === 0 || t.priceExecuted === null || (t.comment && t.comment.toLowerCase().includes('reject')))).length : 0}
+                </span>
+              </button>
+            </div>
+
             {isLoadingTrades ? (
               <div className="flex justify-center py-12">
                 <div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-850 border-t-zinc-400" />
@@ -463,8 +509,16 @@ export default function ClientsPage() {
                               </span>
                             </td>
                             <td className="p-4 text-right font-mono">{trade.volume.toFixed(2)}</td>
-                            <td className="p-4 text-right font-mono text-zinc-400">{trade.priceRequested.toFixed(trade.symbol.includes('JPY') ? 3 : 5)}</td>
-                            <td className="p-4 text-right font-mono font-semibold text-zinc-100">{trade.priceExecuted.toFixed(trade.symbol.includes('JPY') ? 3 : 5)}</td>
+                            <td className="p-4 text-right font-mono text-zinc-400">
+                              {trade.priceRequested !== undefined && trade.priceRequested !== null && trade.priceRequested !== 0
+                                ? trade.priceRequested.toFixed(trade.symbol.includes('JPY') ? 3 : 5)
+                                : 'N/A'}
+                            </td>
+                            <td className="p-4 text-right font-mono font-semibold text-zinc-100">
+                              {trade.priceExecuted !== undefined && trade.priceExecuted !== null && trade.priceExecuted !== 0
+                                ? trade.priceExecuted.toFixed(trade.symbol.includes('JPY') ? 3 : 5)
+                                : 'N/A'}
+                            </td>
                             
                             {/* PnL Column */}
                             <td className={`p-4 text-right font-mono font-bold ${

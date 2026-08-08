@@ -38,43 +38,53 @@ export class InvestigationsService {
     const trades = await this.mt5Service.getClientTrades(dto.brokerId, dto.login, operatorId, ipAddress);
     const targetTrade = trades.find((t) => t.positionId === dto.ticket || t.ticket === dto.ticket);
     
-    if (!targetTrade) {
-      throw new BadRequestException(`Failed to locate trade details for position #${dto.ticket}`);
-    }
+    let entryIncident;
+    let exitIncident = null;
     
-    const entryOrderId = targetTrade.entry?.orderId;
-    const entryDealId = targetTrade.entry?.dealId;
-    const exitOrderId = targetTrade.exit?.orderId;
-    const exitDealId = targetTrade.exit?.dealId;
-    
-    const entryIncident = incidents.find((incident) => {
-      return incident.events.some((e) => {
-        const orderId = e.metadata.orderId;
-        const dealId = e.metadata.dealId;
-        const ticket = e.metadata.ticket;
-        
-        return (entryOrderId && orderId === entryOrderId) || 
-               (entryDealId && dealId === entryDealId) ||
-               (ticket && ticket === dto.ticket); // legacy match
+    if (targetTrade) {
+      const entryOrderId = targetTrade.entry?.orderId;
+      const entryDealId = targetTrade.entry?.dealId;
+      const exitOrderId = targetTrade.exit?.orderId;
+      const exitDealId = targetTrade.exit?.dealId;
+      
+      entryIncident = incidents.find((incident) => {
+        return incident.events.some((e) => {
+          const orderId = e.metadata.orderId;
+          const dealId = e.metadata.dealId;
+          const ticket = e.metadata.ticket;
+          
+          return (entryOrderId && orderId === entryOrderId) || 
+                 (entryDealId && dealId === entryDealId) ||
+                 (ticket && ticket === dto.ticket);
+        });
       });
-    });
-    
+      
+      exitIncident = incidents.find((incident) => {
+        if (!exitOrderId && !exitDealId) return false;
+        return incident.events.some((e) => {
+          const orderId = e.metadata.orderId;
+          const dealId = e.metadata.dealId;
+          
+          return (exitOrderId && orderId === exitOrderId) || 
+                 (exitDealId && dealId === exitDealId);
+        });
+      }) || null;
+    } else {
+      // It might be a rejected trade that only exists in the journal log.
+      // Search the correlated incidents directly by ticket ID
+      entryIncident = incidents.find((incident) => {
+        return incident.ticketId === dto.ticket || incident.events.some((e) => {
+          return e.metadata.orderId === dto.ticket || 
+                 e.metadata.ticket === dto.ticket;
+        });
+      });
+    }
+
     if (!entryIncident) {
       throw new BadRequestException(
         `Failed to reconstruct opening trade lifecycle. Ensure Ticket #${dto.ticket} exists in the MT5 journal.`,
       );
     }
-    
-    const exitIncident = incidents.find((incident) => {
-      if (!exitOrderId && !exitDealId) return false;
-      return incident.events.some((e) => {
-        const orderId = e.metadata.orderId;
-        const dealId = e.metadata.dealId;
-        
-        return (exitOrderId && orderId === exitOrderId) || 
-               (exitDealId && dealId === exitDealId);
-      });
-    }) || null;
  
      // 3. Programmatically calculate execution metrics for entry and exit separately
      let digits: number | null = null;

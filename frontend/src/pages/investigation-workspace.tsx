@@ -520,75 +520,131 @@ export default function InvestigationWorkspacePage() {
                   )}
                 </div>
               </div>
+              {entry.rejection?.isRejected ? (
+                <div className="rounded-xl border border-red-950 bg-red-950/10 p-6 space-y-4">
+                  <div className="flex items-center gap-2 border-b border-red-950 pb-3">
+                    <AlertTriangle className="h-4.5 w-4.5 text-red-400" />
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-red-400">Trade Request Rejected</h4>
+                  </div>
+                  <div className="grid gap-6 sm:grid-cols-3 text-xs font-mono">
+                    <div className="bg-red-950/20 border border-red-900/30 rounded-lg p-4">
+                      <span className="text-[10px] text-red-400 block uppercase font-semibold">Rejection Reason</span>
+                      <span className="text-lg font-bold text-red-200 mt-1 block">
+                        {entry.rejection.reason}
+                      </span>
+                      <span className="text-[9px] text-zinc-500 block mt-1">
+                        Raw log: "{entry.rejection.rawReason || 'N/A'}"
+                      </span>
+                    </div>
 
-              {/* Overall Trade Summary */}
-              <div className="rounded-xl border border-zinc-900 bg-zinc-900/10 p-6 space-y-4">
-                <div className="flex items-center gap-2 border-b border-zinc-900 pb-3">
-                  <Activity className="h-4.5 w-4.5 text-zinc-400" />
-                  <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-300">Overall Trade Summary</h4>
+                    <div className="bg-red-950/20 border border-red-900/30 rounded-lg p-4">
+                      <span className="text-[10px] text-red-400 block uppercase font-semibold">Rejected By</span>
+                      <span className="text-lg font-bold text-red-200 mt-1 block">
+                        {entry.rejection.rejectedBy}
+                      </span>
+                      <span className="text-[9px] text-zinc-500 block mt-1">
+                        System component or Desk
+                      </span>
+                    </div>
+
+                    <div className="bg-red-950/20 border border-red-900/30 rounded-lg p-4">
+                      <span className="text-[10px] text-red-400 block uppercase font-semibold">Failed Stage</span>
+                      <span className="text-lg font-bold text-red-200 mt-1 block font-semibold text-red-400">
+                        {entry.rejection.failedStage}
+                      </span>
+                      <span className="text-[9px] text-zinc-500 block mt-1">
+                        Last successful: {entry.rejection.lastSuccessfulStage}
+                      </span>
+                    </div>
+                  </div>
+                  <div className="text-xs text-zinc-400 bg-red-950/5 p-4 rounded-lg border border-red-950/30">
+                    <p className="font-semibold text-red-300">Failure Explanation:</p>
+                    <p className="mt-1 leading-relaxed">
+                      The client request successfully completed the <strong>{entry.rejection.lastSuccessfulStage}</strong> stage, but failed at <strong>{entry.rejection.failedStage}</strong> after being rejected by <strong>{entry.rejection.rejectedBy}</strong>. Deal execution did not occur, and no market position was created.
+                    </p>
+                  </div>
                 </div>
-
-                <div className="grid gap-6 sm:grid-cols-3">
-                  <div className="bg-zinc-950/20 border border-zinc-900/50 rounded-lg p-4">
-                    <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Net Adverse Price Impact</span>
-                    <span className="text-xl font-bold text-red-400 mt-1 block font-mono">
-                      {summary.netAdversePriceImpact} points
-                    </span>
-                    <span className="text-[9px] text-zinc-500 block mt-1">
-                      Entry: {entry.slippageType === 'Adverse' ? entry.slippagePoints : 0} pts | Exit: {exit && exit.slippageType === 'Adverse' ? exit.slippagePoints : 0} pts
-                    </span>
+              ) : (
+                <div className="rounded-xl border border-zinc-900 bg-zinc-900/10 p-6 space-y-4">
+                  <div className="flex items-center gap-2 border-b border-zinc-900 pb-3">
+                    <Activity className="h-4.5 w-4.5 text-zinc-400" />
+                    <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-300">Overall Trade Summary</h4>
                   </div>
 
-                  <div className="bg-zinc-950/20 border border-zinc-900/50 rounded-lg p-4">
-                    <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Cumulative Execution Latency</span>
-                    <span className="text-xl font-bold text-zinc-100 mt-1 block font-mono">
-                      {summary.cumulativeLatencyMs} ms
-                    </span>
-                    <span className="text-[9px] text-zinc-500 block mt-1">
-                      Across Entry + Exit executions
-                    </span>
-                  </div>
+                  <div className="grid gap-6 sm:grid-cols-3">
+                    <div className="bg-zinc-950/20 border border-zinc-900/50 rounded-lg p-4">
+                      <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Net Adverse Price Impact</span>
+                      <span className="text-xl font-bold text-red-400 mt-1 block font-mono">
+                        {summary.netAdversePriceImpact} points
+                      </span>
+                      <span className="text-[9px] text-zinc-500 block mt-1">
+                        Entry: {entry.slippageType === 'Adverse' ? entry.slippagePoints : 0} pts | Exit: {exit && exit.slippageType === 'Adverse' ? exit.slippagePoints : 0} pts
+                      </span>
+                    </div>
 
-                  <div className="bg-zinc-950/20 border border-zinc-900/50 rounded-lg p-4">
-                    <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Average Execution Latency</span>
-                    <span className="text-xl font-bold text-zinc-300 mt-1 block font-mono">
-                      {exit ? ((entry.executionLatencyMs + exit.executionLatencyMs) / 2).toFixed(0) : entry.executionLatencyMs} ms
-                    </span>
-                    <span className="text-[9px] text-zinc-500 block mt-1">
-                      Mean execution processing delay
-                    </span>
+                    <div className="bg-zinc-950/20 border border-zinc-900/50 rounded-lg p-4">
+                      <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Cumulative Execution Latency</span>
+                      <span className="text-xl font-bold text-zinc-100 mt-1 block font-mono">
+                        {summary.cumulativeLatencyMs} ms
+                      </span>
+                      <span className="text-[9px] text-zinc-500 block mt-1">
+                        Across Entry + Exit executions
+                      </span>
+                    </div>
+
+                    <div className="bg-zinc-950/20 border border-zinc-900/50 rounded-lg p-4">
+                      <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Average Execution Latency</span>
+                      <span className="text-xl font-bold text-zinc-300 mt-1 block font-mono">
+                        {exit ? ((entry.executionLatencyMs + exit.executionLatencyMs) / 2).toFixed(0) : entry.executionLatencyMs} ms
+                      </span>
+                      <span className="text-[9px] text-zinc-500 block mt-1">
+                        Mean execution processing delay
+                      </span>
+                    </div>
                   </div>
                 </div>
-              </div>
+              )}
 
               {/* Quality Summary banner */}
-              <div className={`rounded-xl border p-5 flex items-start gap-4 max-w-2xl ${
-                entry.isNormal && (!exit || exit.isNormal)
-                  ? 'border-emerald-950 bg-emerald-950/10 text-emerald-400' 
-                  : 'border-amber-950 bg-amber-950/10 text-amber-400'
-              }`}>
-                {entry.isNormal && (!exit || exit.isNormal) ? (
-                  <>
-                    <CheckCircle className="h-5 w-5 shrink-0 mt-0.5 text-emerald-500" />
-                    <div className="text-xs">
-                      <h5 className="font-semibold mb-0.5">Execution parameters normal</h5>
-                      <p className="text-emerald-500/80 leading-relaxed">
-                        All transaction legs met standard broker speed thresholds (under 300ms) with minimal price slippage and zero requotes.
-                      </p>
-                    </div>
-                  </>
-                ) : (
-                  <>
-                    <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5 text-amber-500" />
-                    <div className="text-xs">
-                      <h5 className="font-semibold mb-0.5">Execution parameters exceeded normal thresholds</h5>
-                      <p className="text-amber-500/80 leading-relaxed">
-                        Adverse slippage, latencies, or dealer requote events occurred on one or more transaction legs. Check timelines above.
-                      </p>
-                    </div>
-                  </>
-                )}
-              </div>
+              {entry.rejection?.isRejected ? (
+                <div className="rounded-xl border border-red-950 bg-red-950/10 text-red-400 p-5 flex items-start gap-4 max-w-2xl">
+                  <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5" />
+                  <div>
+                    <h5 className="text-xs font-bold uppercase tracking-wider font-semibold">Audit Alert: Order Rejected</h5>
+                    <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
+                      The compliance audit has flagged this order as rejected due to "{entry.rejection.reason}". Dynamic log checks confirmed that no execution deal was performed, leaving the position uncreated.
+                    </p>
+                  </div>
+                </div>
+              ) : (
+                <div className={`rounded-xl border p-5 flex items-start gap-4 max-w-2xl ${
+                  entry.isNormal && (!exit || exit.isNormal)
+                    ? 'border-emerald-950 bg-emerald-950/10 text-emerald-400' 
+                    : 'border-amber-950 bg-amber-950/10 text-amber-400'
+                }`}>
+                  {entry.isNormal && (!exit || exit.isNormal) ? (
+                    <>
+                      <CheckCircle className="h-5 w-5 shrink-0 mt-0.5 text-emerald-500" />
+                      <div className="text-xs">
+                        <h5 className="font-semibold mb-0.5">Execution parameters normal</h5>
+                        <p className="text-emerald-500/80 leading-relaxed">
+                          All transaction legs met standard broker speed thresholds (under 300ms) with minimal price slippage and zero requotes.
+                        </p>
+                      </div>
+                    </>
+                  ) : (
+                    <>
+                      <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5 text-amber-500" />
+                      <div className="text-xs">
+                        <h5 className="font-semibold mb-0.5">Execution parameters exceeded normal thresholds</h5>
+                        <p className="text-amber-500/80 leading-relaxed">
+                          Adverse slippage, latencies, or dealer requote events occurred on one or more transaction legs. Check timelines above.
+                        </p>
+                      </div>
+                    </>
+                  )}
+                </div>
+              )}
             </div>
           );
         })()}

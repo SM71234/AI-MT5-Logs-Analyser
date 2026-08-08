@@ -20,7 +20,9 @@ export interface NormalizedEvent {
     | 'DEALER_ACCEPTED'
     | 'DEALER_REQUOTED'
     | 'REQUOTE_ACCEPTED'
-    | 'ORDER_EXECUTED';
+    | 'ORDER_EXECUTED'
+    | 'ORDER_REJECTED'
+    | 'DEALER_REJECTED';
   rawMessage: string;
   login: string;
   metadata: {
@@ -34,6 +36,7 @@ export interface NormalizedEvent {
     requotePrice?: number;
     orderId?: string;
     dealId?: string;
+    rawReason?: string;
   };
 }
 
@@ -183,6 +186,35 @@ export class NormalizationEngine {
           volume: parseFloat(match[5]),
           symbol: match[6],
           priceExecuted: parseFloat(match[7]),
+        },
+      }),
+    },
+    // 8. Order rejected: [Trade] 'login': request rejected: reason
+    {
+      type: 'ORDER_REJECTED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+request\s+rejected:\s+(.+)/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[2],
+        metadata: {
+          rawReason: match[3].trim(),
+        },
+      }),
+    },
+    // 9. Dealer rejected: [Dealer] dealer #ID rejected buy/sell volume symbol at price (rejection)
+    {
+      type: 'DEALER_REJECTED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Dealer\]\s+dealer\s+#(\d+)\s+rejected\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)\s+\((.+)\)/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: '',
+        metadata: {
+          dealerId: match[2],
+          action: match[3].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[4]),
+          symbol: match[5],
+          priceRequested: parseFloat(match[6]),
+          rawReason: match[7].trim(),
         },
       }),
     },

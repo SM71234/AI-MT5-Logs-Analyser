@@ -158,7 +158,10 @@ MOCK_USERS = [
     {"login": "1001", "name": "Normal Trader", "group": "demo\\standard", "leverage": 100, "balance": 10000.0, "equity": 10000.0, "currency": "USD", "lastIp": "12.34.56.78", "lastAccess": int(time.time()), "registration": int(time.time() - 365*24*3600)},
     {"login": "2002", "name": "Slippage Disputed Client", "group": "real\\gold_vip", "leverage": 500, "balance": 50000.0, "equity": 48900.0, "currency": "USD", "lastIp": "85.23.41.99", "lastAccess": int(time.time()), "registration": int(time.time() - 100*24*3600)},
     {"login": "3003", "name": "Dealer Requote Client", "group": "real\\standard", "leverage": 200, "balance": 15000.0, "equity": 15150.0, "currency": "USD", "lastIp": "103.25.10.8", "lastAccess": int(time.time()), "registration": int(time.time() - 50*24*3600)},
-    {"login": "4004", "name": "Latency Execution Client", "group": "real\\vip", "leverage": 500, "balance": 250000.0, "equity": 247000.0, "currency": "USD", "lastIp": "210.88.92.54", "lastAccess": int(time.time()), "registration": int(time.time() - 200*24*3600)}
+    {"login": "4004", "name": "Latency Execution Client", "group": "real\\vip", "leverage": 500, "balance": 250000.0, "equity": 247000.0, "currency": "USD", "lastIp": "210.88.92.54", "lastAccess": int(time.time()), "registration": int(time.time() - 200*24*3600)},
+    {"login": "5005", "name": "Margin Rejected Client", "group": "real\\vip", "leverage": 100, "balance": 10.50, "equity": 10.50, "currency": "USD", "lastIp": "44.55.66.77", "lastAccess": int(time.time()), "registration": int(time.time() - 30*24*3600)},
+    {"login": "6006", "name": "Dealer Rejected Client", "group": "real\\standard", "leverage": 200, "balance": 1500.0, "equity": 1500.0, "currency": "USD", "lastIp": "122.33.44.55", "lastAccess": int(time.time()), "registration": int(time.time() - 40*24*3600)},
+    {"login": "7007", "name": "Closed Market Client", "group": "demo\\standard", "leverage": 100, "balance": 5000.0, "equity": 5000.0, "currency": "USD", "lastIp": "198.51.100.12", "lastAccess": int(time.time()), "registration": int(time.time() - 10*24*3600)}
 ]
 
 MOCK_TRADES = {
@@ -185,6 +188,24 @@ MOCK_TRADES = {
         "priceRequested": 142.100, "priceExecuted": 142.080, "slippagePips": 2.0,
         "timeRequested": "2026-08-06T16:45:07.100Z", "timeExecuted": "2026-08-06T16:45:10.800Z",
         "durationSeconds": 3.70, "comment": "High latency delay", "profit": -800.0, "commission": -50.0, "swap": -12.0, "fee": 0.0
+    }],
+    "5005": [{
+        "ticket": "9005", "positionId": "9005", "login": "5005", "symbol": "EURUSD", "action": "BUY", "volume": 10.00,
+        "priceRequested": 1.10200, "priceExecuted": 0.0, "slippagePips": 0.0,
+        "timeRequested": "2026-08-06T17:00:00.120Z", "timeExecuted": "2026-08-06T17:00:00.125Z",
+        "durationSeconds": 0.005, "comment": "Rejected: Insufficient margin", "profit": 0.0, "commission": 0.0, "swap": 0.0, "fee": 0.0
+    }],
+    "6006": [{
+        "ticket": "9006", "positionId": "9006", "login": "6006", "symbol": "GBPUSD", "action": "BUY", "volume": 1.00,
+        "priceRequested": 1.28400, "priceExecuted": 0.0, "slippagePips": 0.0,
+        "timeRequested": "2026-08-06T18:00:00.310Z", "timeExecuted": "2026-08-06T18:00:00.350Z",
+        "durationSeconds": 0.040, "comment": "Rejected by dealer", "profit": 0.0, "commission": 0.0, "swap": 0.0, "fee": 0.0
+    }],
+    "7007": [{
+        "ticket": "9007", "positionId": "9007", "login": "7007", "symbol": "USDJPY", "action": "BUY", "volume": 1.00,
+        "priceRequested": 142.100, "priceExecuted": 0.0, "slippagePips": 0.0,
+        "timeRequested": "2026-08-06T19:00:00.550Z", "timeExecuted": "2026-08-06T19:00:00.555Z",
+        "durationSeconds": 0.005, "comment": "Rejected: Market closed", "profit": 0.0, "commission": 0.0, "swap": 0.0, "fee": 0.0
     }]
 }
 
@@ -213,6 +234,19 @@ MOCK_JOURNALS = {
         "2026-08-06T16:45:07.250Z [Trade] '4004': request transferred to dealers",
         "2026-08-06T16:45:10.500Z [Dealer] dealer #12 accepted market sell 10.00 USDJPY at 142.080",
         "2026-08-06T16:45:10.800Z [Trade] '4004': deal performed #8001 sell 10.00 USDJPY at 142.080"
+    ],
+    "5005": [
+        "2026-08-06T17:00:00.120Z [Trade] '5005': market buy 10.00 EURUSD (requested at 1.10200)",
+        "2026-08-06T17:00:00.125Z [Trade] '5005': request rejected: not enough money"
+    ],
+    "6006": [
+        "2026-08-06T18:00:00.310Z [Trade] '6006': market buy 1.00 GBPUSD (requested at 1.28400)",
+        "2026-08-06T18:00:00.320Z [Trade] '6006': request transferred to dealers",
+        "2026-08-06T18:00:00.350Z [Dealer] dealer #8 rejected buy 1.00 GBPUSD at 1.28400 (dealer rejection)"
+    ],
+    "7007": [
+        "2026-08-06T19:00:00.550Z [Trade] '7007': market buy 1.00 USDJPY (requested at 142.100)",
+        "2026-08-06T19:00:00.555Z [Trade] '7007': request rejected: market closed"
     ]
 }
 
@@ -634,64 +668,102 @@ def get_user_journal(login: str, request: Request):
         if not creds:
             raise HTTPException(status_code=400, detail="Missing MT5 connection headers")
         try:
-            to_ts = int(time.time()) + 86400  # Tomorrow (prevents exclusion due to server-local timezone or clock differences)
-            from_ts = to_ts - (90 * 24 * 3600)  # last 90 days to capture more history
+            params = request.query_params
+            from_ts_param = params.get("from_ts")
+            to_ts_param = params.get("to_ts")
+            
+            if to_ts_param:
+                to_ts = int(float(to_ts_param))
+            else:
+                to_ts = int(time.time()) + 86400
+                
+            if from_ts_param:
+                from_ts = int(float(from_ts_param))
+            else:
+                from_ts = to_ts - (90 * 24 * 3600)
+            
+            journal_lines = []
             
             with _LOCK:
                 manager = _acquire_session(creds["server"], creds["port"], creds["login"], creds["password"])
-                deals = manager.DealRequestByLogins([int(login)], from_ts, to_ts)
-                # Fetch history orders to map exact requested prices & millisecond timestamps
-                orders = manager.HistoryRequestByLogins([int(login)], from_ts, to_ts)
                 
-            if not deals:
-                return {"success": True, "data": []}
-                
-            # Map order ID -> order object
-            orders_map = {}
-            for order in (orders or []):
-                oid = getattr(order, "Order", 0) or 0
-                if oid > 0:
-                    orders_map[oid] = order
+                # Fetch actual server logs directly using LoggerServerRequest
+                # We filter by client login ID to find all corresponding events
+                try:
+                    records = manager.LoggerServerRequest(
+                        int(MT5Manager.EnMTLogRequestMode.MTLogModeStd),
+                        int(MT5Manager.EnMTLogType.MTLogTypeTrade),
+                        from_ts,
+                        to_ts,
+                        f"'{login}'"
+                    )
                     
-            # Synthesize compliant journal lines based on actual history deals and orders
-            journal_lines = []
-            for deal in deals:
-                pid = getattr(deal, "PositionID", 0) or 0
-                symbol = getattr(deal, "Symbol", "") or ""
-                if pid <= 0 or not symbol:
-                    continue
+                    if records:
+                        for rec in records:
+                            dt_str = str(getattr(rec, "datetime", ""))
+                            msg = str(getattr(rec, "message", ""))
+                            try:
+                                # Format: '2026.08.06 22:50:50.902' -> '2026-08-06T22:50:50.902Z'
+                                parts = dt_str.split(" ")
+                                date_part = parts[0].replace(".", "-")
+                                time_part = parts[1]
+                                iso_ts = f"{date_part}T{time_part}Z"
+                            except Exception:
+                                iso_ts = dt_str
+                            
+                            journal_lines.append(f"{iso_ts} [Trade] {msg}")
+                except Exception as log_exc:
+                    # Fail silently on log fetch and fall back to database reconstruction
+                    pass
+
+                # If no raw logs were fetched, reconstruct logs using Deals and History Orders
+                if not journal_lines:
+                    deals = manager.DealRequestByLogins([int(login)], from_ts, to_ts)
+                    orders = manager.HistoryRequestByLogins([int(login)], from_ts, to_ts)
                     
-                oid = getattr(deal, "Order", 0) or 0
-                order = orders_map.get(oid)
-                
-                if order:
-                    setup_msc = getattr(order, "TimeSetupMsc", 0) or (getattr(order, "TimeSetup", 0) * 1000)
-                    done_msc = getattr(deal, "TimeMsc", 0) or (getattr(deal, "Time", 0) * 1000)
-                    if setup_msc <= 0:
-                        setup_msc = done_msc - 100
-                    req_price = getattr(order, "PriceOrder", 0.0) or getattr(deal, "Price", 0.0)
-                else:
-                    done_msc = getattr(deal, "TimeMsc", 0) or (getattr(deal, "Time", 0) * 1000)
-                    setup_msc = done_msc - 50
-                    req_price = getattr(deal, "Price", 0.0)
-                
-                # Format timestamps with exactly 3 decimals for milliseconds
-                req_time = datetime.fromtimestamp(setup_msc / 1000.0, UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-                deal_time = datetime.fromtimestamp(done_msc / 1000.0, UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
-                
-                action_code = getattr(deal, "Action", 0)
-                action_str = "buy" if action_code == 0 else "sell"
-                
-                vol_ext = getattr(deal, "VolumeExt", 0)
-                vol_raw = getattr(deal, "Volume", 0)
-                volume = _volume_lots(vol_ext, vol_raw)
-                price = getattr(deal, "Price", 0.0)
-                
-                deal_id = getattr(deal, "Deal", 0)
-                journal_lines.append(f"{req_time} [Trade] '1001': order placed for execution for '{login}' [#{oid} {action_str} {volume:.2f} {symbol} at {req_price:.5f}], time 0.52 ms")
-                journal_lines.append(f"{deal_time} [Trade] Centroid Gateway '{login}': deal performed [#{deal_id} {action_str} {volume:.2f} {symbol} at {price:.5f}]")
-                journal_lines.append(f"{deal_time} [Trade] Centroid Gateway '{login}': order performed {action_str} {volume:.2f} at {price:.5f} [#{oid} {action_str} {volume:.2f} {symbol} at {req_price:.5f}], time: 0.05 ms")
-                
+                    if deals:
+                        orders_map = {}
+                        for order in (orders or []):
+                            oid = getattr(order, "Order", 0) or 0
+                            if oid > 0:
+                                orders_map[oid] = order
+                                
+                        for deal in deals:
+                            pid = getattr(deal, "PositionID", 0) or 0
+                            symbol = getattr(deal, "Symbol", "") or ""
+                            if pid <= 0 or not symbol:
+                                continue
+                                
+                            oid = getattr(deal, "Order", 0) or 0
+                            order = orders_map.get(oid)
+                            
+                            if order:
+                                setup_msc = getattr(order, "TimeSetupMsc", 0) or (getattr(order, "TimeSetup", 0) * 1000)
+                                done_msc = getattr(deal, "TimeMsc", 0) or (getattr(deal, "Time", 0) * 1000)
+                                if setup_msc <= 0:
+                                    setup_msc = done_msc - 100
+                                req_price = getattr(order, "PriceOrder", 0.0) or getattr(deal, "Price", 0.0)
+                            else:
+                                done_msc = getattr(deal, "TimeMsc", 0) or (getattr(deal, "Time", 0) * 1000)
+                                setup_msc = done_msc - 50
+                                req_price = getattr(deal, "Price", 0.0)
+                            
+                            req_time = datetime.fromtimestamp(setup_msc / 1000.0, UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                            deal_time = datetime.fromtimestamp(done_msc / 1000.0, UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                            
+                            action_code = getattr(deal, "Action", 0)
+                            action_str = "buy" if action_code == 0 else "sell"
+                            
+                            vol_ext = getattr(deal, "VolumeExt", 0)
+                            vol_raw = getattr(deal, "Volume", 0)
+                            volume = _volume_lots(vol_ext, vol_raw)
+                            price = getattr(deal, "Price", 0.0)
+                            
+                            deal_id = getattr(deal, "Deal", 0)
+                            journal_lines.append(f"{req_time} [Trade] '1001': order placed for execution for '{login}' [#{oid} {action_str} {volume:.2f} {symbol} at {req_price:.5f}], time 0.52 ms")
+                            journal_lines.append(f"{deal_time} [Trade] Centroid Gateway '{login}': deal performed [#{deal_id} {action_str} {volume:.2f} {symbol} at {price:.5f}]")
+                            journal_lines.append(f"{deal_time} [Trade] Centroid Gateway '{login}': order performed {action_str} {volume:.2f} at {price:.5f} [#{oid} {action_str} {volume:.2f} {symbol} at {req_price:.5f}], time: 0.05 ms")
+            
             return {"success": True, "data": journal_lines}
         except Exception as exc:
             raise HTTPException(status_code=500, detail=str(exc))

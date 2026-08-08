@@ -18,6 +18,14 @@ export interface CalculatedMetrics {
   reason: string | null;
   priceRequested?: number;
   priceExecuted?: number;
+  rejection?: {
+    isRejected: boolean;
+    reason: string | null;
+    rawReason: string | null;
+    rejectedBy: string | null;
+    failedStage: string | null;
+    lastSuccessfulStage: string | null;
+  };
 }
 
 @Injectable()
@@ -37,11 +45,13 @@ export class MetricsService {
     const dealerAcceptEvent = events.find((e) => e.eventType === 'DEALER_ACCEPTED');
     const execEvent = events.find((e) => e.eventType === 'ORDER_EXECUTED');
 
-    // Execution latency: total time between client click (submitted) and deal executed
+    // Execution latency: total time between client click (submitted) and deal executed/rejected
     let executionLatencyMs = 0;
-    if (submitEvent && execEvent) {
+    const rejectEvent = events.find((e) => e.eventType === 'ORDER_REJECTED' || e.eventType === 'DEALER_REJECTED');
+    const endEvent = execEvent || rejectEvent;
+    if (submitEvent && endEvent) {
       executionLatencyMs =
-        new Date(execEvent.timestamp).getTime() - new Date(submitEvent.timestamp).getTime();
+        new Date(endEvent.timestamp).getTime() - new Date(submitEvent.timestamp).getTime();
     }
 
     // Dealer latency: time request spent waiting in manual dealer terminal queue
@@ -102,6 +112,59 @@ export class MetricsService {
     const checkedSlippage = slippagePoints !== null ? slippagePoints : legacyPips;
     const isNormal = executionLatencyMs < 300 && checkedSlippage <= 1.0 && !hasRequote;
 
+    // Rejection analysis
+    const isRejected = !!rejectEvent;
+    
+    let rejection = undefined;
+    if (isRejected) {
+      const rawReason = rejectEvent.metadata.rawReason || '';
+      let reason = 'Unknown rejection reason';
+      let rejectedBy = 'Unknown';
+      let failedStage = 'Unknown';
+      let lastSuccessfulStage = 'Unknown';
+
+      if (rejectEvent.eventType === 'ORDER_REJECTED') {
+        const lowerReason = rawReason.toLowerCase();
+        if (lowerReason.includes('not enough money') || lowerReason.includes('margin')) {
+          reason = 'Insufficient margin';
+          rejectedBy = 'MT5 Server (Margin Validation)';
+          failedStage = 'Server Validation';
+          lastSuccessfulStage = 'Client Request';
+        } else if (lowerReason.includes('market closed')) {
+          reason = 'Market closed';
+          rejectedBy = 'MT5 Server';
+          failedStage = 'Server Validation';
+          lastSuccessfulStage = 'Client Request';
+        } else if (lowerReason.includes('invalid volume')) {
+          reason = 'Invalid volume';
+          rejectedBy = 'MT5 Server (Trading Rules)';
+          failedStage = 'Server Validation';
+          lastSuccessfulStage = 'Client Request';
+        } else {
+          reason = rawReason || 'Request rejected';
+          rejectedBy = 'MT5 Server';
+          failedStage = 'Server Validation';
+          lastSuccessfulStage = 'Client Request';
+        }
+      } else if (rejectEvent.eventType === 'DEALER_REJECTED') {
+        reason = 'Dealer rejection';
+        rejectedBy = `Dealer #${rejectEvent.metadata.dealerId || 'Desk'}`;
+        failedStage = 'Dealer Desk';
+        
+        const hasRoute = events.some(e => e.eventType === 'ORDER_ROUTED');
+        lastSuccessfulStage = hasRoute ? 'Routing' : 'Server Validation';
+      }
+
+      rejection = {
+        isRejected,
+        reason,
+        rawReason: rawReason || null,
+        rejectedBy,
+        failedStage,
+        lastSuccessfulStage,
+      };
+    }
+
     return {
       executionLatencyMs,
       dealerLatencyMs,
@@ -120,6 +183,7 @@ export class MetricsService {
       reason: digits === null ? 'Symbol Digits/Point Size not available' : null,
       priceRequested: initialPrice,
       priceExecuted: finalPrice,
+      rejection,
     };
   }
 
