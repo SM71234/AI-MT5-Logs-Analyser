@@ -804,11 +804,20 @@ def get_user_journal(login: str, request: Request):
                             dt_str = str(getattr(rec, "datetime", ""))
                             msg = str(getattr(rec, "message", ""))
                             try:
-                                # Format: '2026.08.06 22:50:50.902' -> '2026-08-06T22:50:50.902Z'
-                                parts = dt_str.split(" ")
-                                date_part = parts[0].replace(".", "-")
-                                time_part = parts[1]
-                                iso_ts = f"{date_part}T{time_part}Z"
+                                # Try parsing as unix epoch timestamp (seconds or milliseconds)
+                                try:
+                                    ts_val = float(dt_str)
+                                    if ts_val > 1e11:  # milliseconds
+                                        ts_val = ts_val / 1000.0
+                                    iso_ts = datetime.fromtimestamp(ts_val, UTC).isoformat().replace("+00:00", "Z")
+                                except ValueError:
+                                    if " " in dt_str:
+                                        parts = dt_str.split(" ")
+                                        date_part = parts[0].replace(".", "-")
+                                        time_part = parts[1]
+                                        iso_ts = f"{date_part}T{time_part}Z"
+                                    else:
+                                        iso_ts = dt_str
                             except Exception:
                                 iso_ts = dt_str
                             

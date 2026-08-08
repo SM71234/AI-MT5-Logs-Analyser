@@ -64,7 +64,7 @@ export class NormalizationEngine {
     // Real deal performed: [Trade] Centroid Gateway '910102': deal performed [#712 buy 0.01 XAUUSD.s at 4349.36]
     {
       type: 'ORDER_EXECUTED' as const,
-      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+.*Centroid\s+Gateway\s+'(\d+)':\s+deal\s+performed\s+\[#(\d+)\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)\]/i,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+(?:.*?\s+)?'(\d+)':\s+deal\s+performed\s+\[#(\d+)\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)\]/i,
       parse: (match: RegExpMatchArray) => ({
         timestamp: parseTimestamp(match[1]),
         login: match[2],
@@ -80,7 +80,7 @@ export class NormalizationEngine {
     // Real order performed: [Trade] Centroid Gateway '910102': order performed buy 0.01 at 4349.36 [#670 buy 0.01 XAUUSD.s at 4349.26]
     {
       type: 'ORDER_EXECUTED' as const,
-      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+.*Centroid\s+Gateway\s+'(\d+)':\s+order\s+performed\s+(buy|sell)\s+([\d\.]+)\s+at\s+([\d\.]+)\s+\[#(\d+)\s+(?:buy|sell)\s+[\d\.]+\s+[\w\.-]+\s+at\s+([\d\.]+)\]/i,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+(?:.*?\s+)?'(\d+)':\s+order\s+performed\s+(buy|sell)\s+([\d\.]+)\s+at\s+([\d\.]+)\s+\[#(\d+)\s+(?:buy|sell)\s+[\d\.]+\s+[\w\.-]+\s+at\s+([\d\.]+)\]/i,
       parse: (match: RegExpMatchArray) => ({
         timestamp: parseTimestamp(match[1]),
         login: match[2],
@@ -215,6 +215,38 @@ export class NormalizationEngine {
           symbol: match[5],
           priceRequested: parseFloat(match[6]),
           rawReason: match[7].trim(),
+        },
+      }),
+    },
+    // 10. Direct execution rejection: [Trade] 'login': order #ID buy/sell volume symbol at price rejected due execution [reason]
+    {
+      type: 'ORDER_REJECTED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+order\s+#(\d+)\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)\s+rejected\s+due\s+execution\s+\[(.+?)\]/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[2],
+        metadata: {
+          orderId: match[3],
+          action: match[4].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[5]),
+          symbol: match[6],
+          priceRequested: parseFloat(match[7]),
+          rawReason: match[8].trim(),
+        },
+      }),
+    },
+    // 11. Margin rejection: [Trade] 'login': not enough money [market buy/sell volume symbol]
+    {
+      type: 'ORDER_REJECTED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+not\s+enough\s+money\s+\[market\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\]/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[2],
+        metadata: {
+          action: match[3].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[4]),
+          symbol: match[5],
+          rawReason: 'Not enough money',
         },
       }),
     },
