@@ -398,7 +398,7 @@ def get_user_trades(login: str, request: Request):
                 orders = manager.HistoryRequestByLogins([int(login)], from_ts, to_ts)
                 
             if deals is None:
-                return {"success": True, "data": []}
+                deals = []
                 
             # Map order ID -> execution delay in seconds
             latency_map = {}
@@ -651,6 +651,88 @@ def get_user_trades(login: str, request: Request):
                     "fee": round(fee, 2)
                 })
             
+            # Now, append unexecuted/rejected orders from History Orders list
+            executed_order_ids = set()
+            for deal in deals:
+                oid = getattr(deal, "Order", 0) or 0
+                if oid > 0:
+                    executed_order_ids.add(oid)
+
+            for order in (orders or []):
+                oid = getattr(order, "Order", 0) or 0
+                if oid > 0 and oid not in executed_order_ids:
+                    comment = getattr(order, "Comment", "") or ""
+                    symbol = getattr(order, "Symbol", "")
+                    action_code = getattr(order, "Type", 0)  # 0=BUY, 1=SELL
+                    action = "BUY" if action_code == 0 else "SELL"
+                    
+                    vol_ext = getattr(order, "VolumeExt", 0)
+                    vol_raw = getattr(order, "VolumeInitial", 0) or getattr(order, "Volume", 0)
+                    volume = _volume_lots(vol_ext, vol_raw)
+                    
+                    setup_msc = getattr(order, "TimeSetupMsc", 0) or (getattr(order, "TimeSetup", 0) * 1000)
+                    done_msc = getattr(order, "TimeDoneMsc", 0) or (getattr(order, "TimeDone", 0) * 1000)
+                    if setup_msc <= 0:
+                        setup_msc = done_msc - 100
+                        
+                    open_time_str = datetime.fromtimestamp(setup_msc / 1000.0, UTC).isoformat().replace("+00:00", "Z")
+                    price_req = getattr(order, "PriceOrder", 0.0) or getattr(order, "PriceTrigger", 0.0) or 0.0
+                    latency_ms = max(done_msc - setup_msc, 0)
+                    
+                    # Fetch dynamically or from cache
+                    with _LOCK:
+                        digits, point = get_symbol_spec(manager, creds["server"], symbol)
+
+                    entry_metrics = {
+                        "action": action,
+                        "orderId": str(oid),
+                        "dealId": "",
+                        "priceRequested": round(price_req, 5),
+                        "priceExecuted": 0.0,
+                        "rawPriceDifference": 0.0,
+                        "digits": digits,
+                        "pointSize": point,
+                        "slippagePoints": None,
+                        "slippageType": "Zero",
+                        "latencyMs": round(latency_ms, 1)
+                    }
+
+                    trades.append({
+                        "ticket": str(oid),
+                        "positionId": str(oid),
+                        "login": login,
+                        "symbol": symbol,
+                        "action": action,
+                        "volume": round(volume, 2),
+                        
+                        "priceRequested": round(price_req, 5),
+                        "priceExecuted": 0.0,
+                        "slippagePips": 0.0,
+                        "rawPriceDifference": 0.0,
+                        "digits": digits,
+                        "pointSize": point,
+                        "slippagePoints": None,
+                        "slippageType": "Zero",
+                        "latencyMs": round(latency_ms, 1),
+                        
+                        "entry": entry_metrics,
+                        "exit": None,
+                        "summary": {
+                            "netAdversePriceImpact": 0.0,
+                            "cumulativeLatencyMs": round(latency_ms, 1),
+                            "averageLatencyMs": round(latency_ms, 1)
+                        },
+                        
+                        "timeRequested": open_time_str,
+                        "timeExecuted": open_time_str,
+                        "durationSeconds": round(latency_ms / 1000.0, 3),
+                        "comment": comment or "Order rejected/canceled",
+                        "profit": 0.0,
+                        "commission": 0.0,
+                        "swap": 0.0,
+                        "fee": 0.0
+                    })
+
             # Sort trades by closeTime descending so that RECENT TRADES ARE SHOWN FIRST
             trades.sort(key=lambda t: t["timeExecuted"], reverse=True)
             return {"success": True, "data": trades}
