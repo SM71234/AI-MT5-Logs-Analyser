@@ -234,6 +234,7 @@ MOCK_JOURNALS = {
         "2026-08-06T16:45:07.250Z [Trade] '4004': request transferred to dealers",
         "2026-08-06T16:45:10.500Z [Dealer] dealer #12 accepted market sell 10.00 USDJPY at 142.080",
         "2026-08-06T16:45:10.800Z [Trade] '4004': deal performed #8001 sell 10.00 USDJPY at 142.080"
+    ],
     "5005": [
         "2026-08-06T17:00:00.120Z [Trade] '1001': order placed for execution for '5005' [#9005 buy 10.00 EURUSD at 1.10200]",
         "2026-08-06T17:00:00.125Z [Trade] '5005': request rejected: not enough money"
