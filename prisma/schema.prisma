@@ -1,0 +1,94 @@
+datasource db {
+  provider = "sqlite"
+  url      = env("DATABASE_URL")
+}
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+model User {
+  id             String          @id @default(uuid())
+  email          String          @unique
+  passwordHash   String
+  name           String
+  role           String          @default("SUPPORT")
+  createdAt      DateTime        @default(now()) @map("created_at")
+  updatedAt      DateTime        @updatedAt @map("updated_at")
+  auditLogs      AuditLog[]
+  investigations Investigation[]
+  notes          Note[]
+
+  @@map("users")
+}
+
+model Broker {
+  id                String           @id @default(uuid())
+  name              String
+  serverAddress     String           @map("server_address")
+  port              Int
+  managerLogin      String           @map("manager_login")
+  encryptedPassword String           @map("encrypted_password")
+  createdAt         DateTime         @default(now()) @map("created_at")
+  updatedAt         DateTime         @updatedAt @map("updated_at")
+  investigations    Investigation[]
+
+  @@map("brokers")
+}
+
+model Investigation {
+  id          String              @id @default(uuid())
+  brokerId    String              @map("broker_id")
+  broker      Broker              @relation(fields: [brokerId], references: [id], onDelete: Cascade)
+  userId      String              @map("user_id")
+  user        User                @relation(fields: [userId], references: [id])
+  clientLogin String              @map("client_login")
+  ticketId    String              @map("ticket_id")
+  status      String              @default("OPEN") // OPEN, CLOSED, RESOLVED
+  title       String
+  summary     String?
+  metrics     String              // SQLite stores JSON as string under Prisma
+  events      String              // SQLite stores JSON as string under Prisma
+  notes       Note[]
+  aiReports   AiReport[]
+  createdAt   DateTime            @default(now()) @map("created_at")
+  updatedAt   DateTime            @updatedAt @map("updated_at")
+
+  @@map("investigations")
+}
+
+model Note {
+  id              String          @id @default(uuid())
+  investigationId String          @map("investigation_id")
+  investigation   Investigation   @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  content         String
+  userId          String          @map("user_id")
+  user            User            @relation(fields: [userId], references: [id])
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  @@map("notes")
+}
+
+model AiReport {
+  id              String          @id @default(uuid())
+  investigationId String          @map("investigation_id")
+  investigation   Investigation   @relation(fields: [investigationId], references: [id], onDelete: Cascade)
+  analysisType    String          @map("analysis_type") // TIMELINE, COMPLAINT, TECHNICAL
+  promptHash      String          @map("prompt_hash")
+  response        String
+  createdAt       DateTime        @default(now()) @map("created_at")
+
+  @@map("ai_reports")
+}
+
+model AuditLog {
+  id        String                @id @default(uuid())
+  userId    String?               @map("user_id")
+  user      User?                 @relation(fields: [userId], references: [id], onDelete: SetNull)
+  action    String
+  details   String
+  ipAddress String?               @map("ip_address")
+  createdAt DateTime              @default(now()) @map("created_at")
+
+  @@map("audit_logs")
+}

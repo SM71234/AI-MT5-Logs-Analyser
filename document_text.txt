@@ -1,0 +1,1250 @@
+
+
+
+    
+    MT5 AI JOURNAL ANALYZER
+    
+    Master Project Definition Document / Project Charter / Technical Context
+    Version: 1.0Status: Active DevelopmentProject Type: Enterprise SaaS / MT5 Operations & Investigation PlatformPrimary Platform: MetaTrader 5Primary Purpose: AI-assisted investigation and explanation of MT5 client trading events and journal/log data
+    
+    
+    
+    
+    1. Project Title & One-Sentence Summary
+    
+    Project Title
+    MT5 AI Journal Analyzer
+    
+    
+    One-Sentence Summary
+    A secure, read-only, multi-broker SaaS platform that connects to MT5 Manager accounts, retrieves client/trade data and relevant journal/log events for selected time periods or trades, reconstructs what happened, calculates deterministic execution metrics, and optionally uses AI to explain the event in simple human-readable language.
+    
+    
+    
+    
+    2. Background & Problem Statement
+    MT5 brokers generate a large amount of operational information for every client action.
+    A single client trade can generate multiple journal events.
+    For example:
+    2026.08.06 11:53:45.149Client 259713 sends BUY 0.01 XAUUSD.r at 4275.74↓Request transferred to dealer↓Dealer receives request↓Dealer confirms BUY 0.01 XAUUSD.r at 4275.75↓Deal performed
+    A close operation can generate another sequence of events.
+    For an active trader with hundreds or thousands of transactions, the resulting journal can contain an enormous number of log entries.
+    Manually investigating this information is difficult.
+    A broker employee may need to determine:
+    What exactly happened?
+    When did the client send the request?
+    When did the dealer receive it?
+    When was it confirmed?
+    At what price was it executed?
+    Was there slippage?
+    How long did execution take?
+    Was the request routed to a dealer?
+    Which order/deal/position does the event belong to?
+    Was the trade opened or closed?
+    Was there an unusual delay?
+    Was the issue caused by the client, broker, dealer, liquidity provider, or server?
+    What should be communicated to the client?
+    The platform exists to answer these questions automatically.
+    
+    
+    
+    3. Objectives & Success Criteria
+    
+    Primary Objectives
+    
+    Objective 1 — Secure Broker Connection
+    Allow a platform user to connect an MT5 broker using:
+    Broker name
+    MT5 Manager/Admin server
+    Manager login
+    Manager password
+    The platform must securely test and maintain the connection.
+    
+    
+    
+    Objective 2 — Client Investigation
+    Allow the user to enter an MT5 client Login/MT5 ID.
+    Example:
+    259713
+    The system should retrieve relevant client information and make it possible to investigate the client’s trading activity.
+    The Manager API reference uses UserGet(login) for retrieving client information.
+    
+    
+    
+    Objective 3 — Time-Based Data Retrieval
+    The user should be able to select:
+    Client:259713From:2026-08-06 00:00To:2026-08-06 23:59
+    The system should retrieve only the relevant data.
+    Do NOT retrieve an unnecessarily large amount of history.
+    The documented Manager API integration supports client-specific deal retrieval using:
+    manager.DealRequestByLogins(    [login],    start_timestamp,    end_timestamp)
+    
+    
+    
+    Objective 4 — Trade Explorer
+    Display the client’s trades in a clean table.
+    Users should be able to select a specific:
+    Order ID
+    Deal ID
+    Position ID
+    Trade
+    Transaction
+    
+    
+    
+    Objective 5 — Journal/Event Investigation
+    Once a trade is selected, retrieve the relevant journal/log events associated with that trade whenever the underlying MT5 API/SDK provides access to those events.
+    The system must NOT assume that trade history and server journal logs are the same thing.
+    The development team must verify the exact journal/log retrieval capability against the official MT5 Manager SDK documentation.
+    
+    
+    
+    Objective 6 — Event Reconstruction
+    Convert raw MT5 data into a chronological event timeline.
+    Example:
+    11:53:45.149Client request11:53:45.149Request transferred to dealer11:53:45.150Dealer received request11:53:45.152Dealer confirmed order11:53:45.152Deal executed
+    
+    
+    
+    Objective 7 — Deterministic Analysis
+    Calculate metrics programmatically.
+    Never ask AI to perform core numerical calculations.
+    Metrics may include:
+    Request latency
+    Dealer response time
+    Execution latency
+    Slippage
+    Spread
+    Trade duration
+    Execution price
+    Requested price
+    Confirmed price
+    Number of retries
+    Number of dealer interactions
+    Event sequence
+    Profit/loss
+    Commission
+    Swap
+    Fees
+    
+    
+    
+    Objective 8 — AI Explanation
+    After deterministic processing, optionally send a structured investigation to an AI provider.
+    The AI should explain:
+    What happened?
+    Why did it happen?
+    Was anything unusual?
+    What evidence supports the conclusion?
+    How should this be explained to the client?
+    
+    
+    
+    
+    Project-Level Definition of Done
+    The project is complete when:
+    A user can securely log into the platform.
+    A user can add multiple MT5 broker connections.
+    Broker credentials are securely stored.
+    The system can establish and maintain MT5 Manager connections.
+    Users can search client accounts.
+    Users can select a time range.
+    Users can retrieve relevant trade/deal data.
+    Users can select a trade.
+    The system can retrieve/associate available journal/log events.
+    Events are normalized and correlated.
+    Metrics are calculated deterministically.
+    The user can inspect raw and processed data.
+    AI can analyze a selected investigation.
+    AI output is evidence-based.
+    The platform remains read-only toward production MT5 servers.
+    Authentication, authorization, logging and audit controls work correctly.
+    The system can handle multiple brokers safely.
+    The application is production-ready and tested.
+    
+    
+    
+    
+    4. Vision / Desired End State
+    The final product should behave like an:
+    
+    
+    “AI Operations Investigator for MT5 Brokers”
+    Instead of a broker employee manually reading hundreds of lines, the platform should transform:
+    Raw MT5 Data      ↓Normalized Events      ↓Correlated Trade Timeline      ↓Deterministic Metrics      ↓Investigation      ↓AI Explanation
+    The final user should be able to understand a complicated MT5 event within seconds.
+    
+    
+    
+    5. Scope
+    
+    5.1 In-Scope
+    
+    Authentication
+    User registration/login
+    JWT authentication
+    Refresh tokens
+    Logout
+    Password security
+    Role-based authorization
+    
+    
+    
+    Broker Management
+    Users can:
+    Add broker
+    Edit broker
+    Delete broker
+    Enable/disable broker
+    Test broker connection
+    Connect broker
+    Disconnect broker
+    View connection status
+    Broker configuration:
+    Broker NameServerManager LoginEncrypted Manager PasswordConnection StatusCreated AtUpdated At
+    
+    
+    
+    MT5 Manager Connection
+    The MT5 connector must use the MetaTrader Manager API.
+    The documented architecture uses:
+    MT5Manager Python Wrapper        ↓MT5APIManager64.dll        ↓MT5 Server
+    The Manager API is a native Windows dependency, so the connector must run on Windows. Supported Python versions in the supplied integration guide are 3.10–3.13.
+    Connection example:
+    import MT5Managermanager = MT5Manager.ManagerAPI()ok = manager.Connect(    server,    login,    password,    pumpmode,    timeout)
+    Use:
+    manager.LastError()
+    for connection diagnostics.
+    Use:
+    manager.Disconnect()
+    to close the connection.
+    
+    
+    
+    Client Data
+    Retrieve client information through:
+    manager.UserGet(login)
+    Potential client information includes:
+    Name
+    Login
+    Group
+    Registration
+    Last IP
+    Last Access
+    Balance
+    Equity
+    Leverage
+    The exact fields available must always be verified against the installed SDK version.
+    
+    
+    
+    Trade/Deal Data
+    Retrieve client-specific historical deals using:
+    manager.DealRequestByLogins(    [login],    from_timestamp,    to_timestamp)
+    The documented MTDeal information includes:
+    Login
+    PositionID
+    Action
+    Entry
+    Symbol
+    Time
+    Volume
+    VolumeExt
+    Profit
+    Storage
+    Commission
+    Fee
+    
+    
+    
+    Active Trades
+    If active positions/orders are required, use the appropriate pump mode.
+    The supplied integration guide states:
+    PUMP_MODE_TRADES
+    or:
+    PUMP_MODE_FULL
+    for active trades/orders/positions.
+    Examples documented in the guide include:
+    manager.PositionGet(login_id)manager.OrderGet(login_id)
+    However, do not enable PUMP_MODE_FULL unnecessarily because it can increase synchronization/network load.
+    
+    
+    
+    Journal / Server Logs
+    This is a critical feature.
+    The product’s ultimate purpose is to analyze journal/log events such as:
+    request from clientrequest transferred to dealersdealer requestdealer confirmationdeal performedconnection eventsexecution eventsserver-side events
+    However:
+    DO NOT INVENT A JournalGet() OR SIMILAR API.
+    The exact Manager SDK capability for retrieving MT5 Administrator/Server journal text must be verified from the official SDK documentation supplied with the project.
+    If direct journal retrieval is unavailable through the Manager API:
+    Document the limitation.
+    Identify the official supported alternative.
+    Do not fake the functionality.
+    Keep the journal provider abstract so another supported source can be added later.
+    
+    
+    
+    
+    
+    5.2 Explicitly Out-of-Scope
+    The first production version must NOT:
+    Place trades
+    Modify trades
+    Delete trades
+    Modify client accounts
+    Modify broker configuration
+    Modify groups
+    Modify symbols
+    Modify server settings
+    Act as a dealer
+    Automatically execute trading operations
+    Automatically change client data
+    The Manager API may technically support dealer operations, but those capabilities are NOT part of this product’s operational scope.
+    The supplied integration guide demonstrates DealerRequestCreate() / DealerRequestSend(), but our application must not use those operations in the read-only investigation platform.
+    
+    
+    
+    5.3 Boundary Assumptions
+    The application assumes:
+    User has valid Manager/Admin credentials.
+    Broker permits the Manager connection.
+    Connector has network access to the MT5 server.
+    Broker firewall allows the connector.
+    Required MT5 Manager API binaries are installed.
+    The Manager account has appropriate read permissions.
+    Journal/log information is available through a supported retrieval mechanism.
+    
+    
+    
+    6. Stakeholders & Roles
+    
+    Platform Owner
+    Responsible for:
+    Product direction
+    Architecture decisions
+    Security decisions
+    Final feature approval
+    
+    
+    
+    Broker Administrator
+    Can:
+    Add brokers
+    Connect brokers
+    Search clients
+    Investigate trades
+    View journal data
+    Run AI analysis
+    
+    
+    
+    Dealer
+    Can:
+    Investigate execution events
+    View trade timelines
+    Analyze dealer routing
+    Review execution metrics
+    
+    
+    
+    Support Agent
+    Can:
+    Search clients
+    Select trades
+    View simplified explanations
+    Generate client-facing explanations
+    
+    
+    
+    Operations/Risk Team
+    Can:
+    Investigate suspicious execution patterns
+    Analyze latency
+    Analyze slippage
+    Review repeated failures
+    Review broker/server behavior
+    
+    
+    
+    
+    Ownership Matrix
+    AreaOwnerResponsibilityProductProject OwnerFinal decisionsBackendEngineeringAPI/business logicFrontendEngineeringUI/UXMT5 ConnectorEngineeringManager API integrationAIEngineeringAI provider/investigationSecurityEngineeringCredentials/accessInfrastructureEngineeringDeployment/monitoring
+    
+    
+    
+    7. Constraints & Dependencies
+    
+    MT5 Manager API
+    The Manager API is a native Windows dependency.
+    The supplied architecture requires:
+    Windows x64+MT5APIManager64.dll+MT5Manager Python wrapper
+    The connector should therefore be isolated as a Windows service.
+    
+    
+    
+    Python
+    Use a supported 64-bit Python version:
+    Python 3.10–3.13
+    Do not use Python 3.14 unless the installed MT5Manager package explicitly supports it.
+    
+    
+    
+    Connection Performance
+    Initial Manager connections may take several seconds.
+    The supplied architecture reports approximately 9 seconds for establishing a new connection and significantly lower latency for reused connections.
+    Therefore:
+    Never create a new Manager connection for every request.
+    Use connection pooling/session reuse.
+    
+    
+    
+    DLL Thread Safety
+    The supplied integration guide states that the native MT5 DLL client is not thread-safe.
+    Therefore:
+    Manager API calls        ↓Serialized access        ↓threading.Lock / RLock
+    Never allow concurrent unsynchronized calls on the same Manager API instance.
+    
+    
+    
+    Server Load
+    Large history queries can create unnecessary server load.
+    Therefore:
+    Require time ranges.
+    Prefer client-specific queries.
+    Limit maximum query range.
+    Paginate where possible.
+    Cache repeated requests.
+    Rate-limit expensive operations.
+    
+    
+    
+    
+    8. High-Level Approach / Strategy
+    
+    Architecture
+                        WEB BROWSER                         │                         ▼                ┌─────────────────┐                │ React Frontend  │                └────────┬────────┘                         │                    REST / JSON                         │                         ▼                ┌─────────────────┐                │  NestJS Backend │                │                 │                │ Auth            │                │ Brokers         │                │ Clients         │                │ Trades          │                │ Investigations  │                │ AI              │                └────────┬────────┘                         │                 HTTP + Secret                         │                         ▼             ┌───────────────────────┐             │   MT5 Connector       │             │   Windows Service     │             │                       │             │ Python + MT5Manager   │             └───────────┬───────────┘                         │                  MT5 Manager API                         │                         ▼                ┌─────────────────┐                │   MT5 Server    │                └─────────────────┘
+    The supplied broker architecture uses the same principle: only the connector directly communicates with the MT5 server.
+    
+    
+    
+    
+    Technology Stack
+    
+    Frontend
+    React 19
+    TypeScript
+    Vite
+    Tailwind CSS
+    shadcn/ui
+    TanStack Query
+    React Router
+    Axios
+    Framer Motion
+    Lucide Icons
+    
+    
+    
+    Main Backend
+    NestJS
+    Node.js
+    TypeScript
+    Prisma
+    PostgreSQL
+    Redis
+    JWT
+    Passport
+    
+    
+    
+    MT5 Connector
+    Python
+    FastAPI
+    MT5Manager
+    MetaQuotes MT5 Manager API
+    MT5APIManager64.dll
+    Windows Server
+    The connector should expose a controlled internal REST API.
+    
+    
+    
+    AI
+    Create an abstraction:
+    AIProvider    │    ├── OpenAIProvider    ├── ClaudeProvider (future)    └── GeminiProvider (future)
+    The application must not be hardcoded to a single AI provider.
+    
+    
+    
+    
+    9. Risks, Issues & Mitigations
+    
+    Risk 1 — MT5 Manager Connection Failure
+    Cause:
+    Incorrect credentials
+    Wrong server
+    Firewall
+    IP restrictions
+    Broker configuration
+    Mitigation:
+    Connection test
+    Detailed LastError()
+    Connection status
+    Automatic reconnect
+    Audit logs
+    
+    
+    
+    Risk 2 — Excessive Server Requests
+    Cause:
+    Large journal/history queries.
+    Mitigation:
+    Time-range restrictions
+    Rate limiting
+    Caching
+    Client-specific queries
+    Lazy loading
+    Maximum result limits
+    
+    
+    
+    Risk 3 — AI Token Exhaustion
+    This is one of the most important product risks.
+    A highly active client can produce enormous amounts of journal data.
+    DO NOT send all logs to AI.
+    Instead:
+    Raw Data   ↓Filter   ↓Normalize   ↓Correlate   ↓Summarize   ↓Metrics   ↓AI
+    AI should only receive the relevant investigation context.
+    
+    
+    
+    Risk 4 — AI Hallucination
+    AI may incorrectly infer the cause of an event.
+    Mitigation:
+    Provide structured evidence.
+    Include timestamps.
+    Include raw event references.
+    Separate facts from inference.
+    Require confidence.
+    Never allow AI to modify source data.
+    
+    
+    
+    Risk 5 — DLL Crashes
+    Cause:
+    Concurrent calls to native Manager API.
+    Mitigation:
+    Serialize Manager API calls.
+    One controlled session per connection.
+    Connection health monitoring.
+    Automatic recovery.
+    
+    
+    
+    Risk 6 — Credential Exposure
+    Mitigation:
+    Encrypt broker passwords.
+    Never expose credentials to frontend.
+    Never log passwords.
+    Environment-based encryption key.
+    Restrict connector access.
+    
+    
+    
+    Risk 7 — Journal API Limitation
+    The Manager API may not provide arbitrary Administrator/Server journal text through the same methods used for deal history.
+    Mitigation:
+    Verify official SDK documentation.
+    Build an abstract JournalProvider.
+    Support alternative officially permitted sources if necessary.
+    Never invent an API.
+    
+    
+    
+    
+    10. Resources & Rough Effort
+    
+    Required Skills
+    React
+    TypeScript
+    NestJS
+    Python
+    FastAPI
+    PostgreSQL
+    Redis
+    MT5 Manager API
+    Windows DLL integration
+    Security
+    AI integration
+    
+    
+    
+    Initial Team
+    A small team can build the MVP:
+    1 Full-stack developer+1 MT5 integration specialist+AI assistance
+    One strong developer can also build the initial MVP with AI assistance.
+    
+    
+    
+    
+    11. Success Metrics / KPIs
+    
+    Technical
+    Broker connection success rate
+    MT5 request latency
+    API response latency
+    Connector uptime
+    Reconnection success rate
+    Failed query rate
+    
+    
+    
+    Product
+    Investigation completion time
+    Average time to identify root cause
+    Number of trades investigated
+    AI analysis usage
+    Repeat investigation rate
+    
+    
+    
+    AI
+    AI response latency
+    AI token usage per investigation
+    AI cost per investigation
+    Evidence coverage
+    Hallucination/error rate
+    User-rated usefulness
+    
+    
+    
+    
+    12. Functional Requirements
+    
+    FR-001 — Authentication
+    User must authenticate before accessing the platform.
+    
+    
+    
+    FR-002 — Broker Creation
+    User can create:
+    Broker NameServerManager LoginManager Password
+    
+    
+    
+    FR-003 — Broker Connection Test
+    System sends credentials to the connector.
+    Connector executes:
+    ManagerAPI()Connect()LastError()
+    and returns a structured result.
+    
+    
+    
+    FR-004 — Persistent Broker
+    Successful broker configuration is stored securely.
+    Password must be encrypted.
+    
+    
+    
+    FR-005 — Connection Pool
+    Existing broker sessions should be reused.
+    The supplied architecture recommends caching Manager connections and maintaining them with a heartbeat.
+    
+    
+    
+    FR-006 — Client Search
+    User enters:
+    MT5 Login
+    System retrieves client information.
+    
+    
+    
+    FR-007 — Time Range
+    User selects:
+    Start DateStart TimeEnd DateEnd TimeTimezone
+    
+    
+    
+    FR-008 — Trade Retrieval
+    Retrieve deals for:
+    Specific client+Specific time range
+    using the appropriate Manager API capability.
+    
+    
+    
+    FR-009 — Trade Reconstruction
+    Raw MT5 deals must be transformed into logical positions/trades where possible.
+    The supplied integration guide recommends correlating transactions using PositionID, distinguishing ENTRY_IN, ENTRY_OUT, and ENTRY_INOUT, and aggregating financial values.
+    
+    
+    
+    FR-010 — Journal Retrieval
+    Retrieve relevant journal/log events when supported.
+    This component must be based on verified SDK capabilities.
+    
+    
+    
+    FR-011 — Event Normalization
+    Example:
+    &quot;request transferred to dealers&quot;→ORDER_ROUTED
+    &quot;request from &#39;259713&#39;&quot;→DEALER_REQUEST_RECEIVED
+    &quot;confirm buy&quot;→ORDER_CONFIRMED
+    &quot;deal performed&quot;→DEAL_EXECUTED
+    
+    
+    
+    FR-012 — Event Correlation
+    Correlate events using available identifiers such as:
+    Login
+    Position ID
+    Order ID
+    Deal ID
+    Symbol
+    Timestamp
+    Direction
+    Volume
+    Price
+    Request text
+    IP
+    Other verified identifiers
+    Do not assume that every identifier is available in every log.
+    
+    
+    
+    FR-013 — Timeline
+    Generate:
+    Request↓Routing↓Dealer↓Confirmation↓Execution
+    
+    
+    
+    FR-014 — Metrics
+    Calculate:
+    Request TimeDealer TimeExecution TimeSlippageSpreadTrade Duration
+    
+    
+    
+    FR-015 — AI Analysis
+    AI receives structured investigation data.
+    Example:
+    {  &quot;client&quot;: 259713,  &quot;symbol&quot;: &quot;XAUUSD.r&quot;,  &quot;side&quot;: &quot;BUY&quot;,  &quot;volume&quot;: 0.01,  &quot;requestedPrice&quot;: 4275.74,  &quot;executedPrice&quot;: 4275.75,  &quot;events&quot;: [],  &quot;metrics&quot;: {}}
+    
+    
+    
+    
+    13. Non-Functional Requirements
+    
+    Security
+    HTTPS
+    JWT
+    RBAC
+    Encrypted credentials
+    Connector secret
+    Audit logging
+    Secure environment variables
+    
+    
+    
+    Performance
+    Target:
+    UI response < 2 seconds
+    for cached/non-MT5 operations.
+    MT5 operations may take longer depending on broker/server/network conditions.
+    
+    
+    
+    Reliability
+    Automatic reconnect
+    Health checks
+    Heartbeats
+    Retry policies
+    Graceful degradation
+    Connector monitoring
+    
+    
+    
+    Scalability
+    The system must support:
+    Multiple application usersMultiple brokersMultiple Manager connectionsMultiple concurrent investigations
+    without creating uncontrolled MT5 connections.
+    
+    
+    
+    
+    14. Major Milestones
+    
+    Phase 1 — Foundation
+    Project setup↓Authentication↓Database↓User management↓Basic dashboard
+    
+    
+    
+    Phase 2 — Broker Management
+    Add broker↓Encrypt credentials↓Test connection↓Connect↓Disconnect↓Connection pooling↓Heartbeat
+    
+    
+    
+    Phase 3 — MT5 Client & Trade Explorer
+    Select broker↓Enter client login↓UserGet()↓Select time range↓DealRequestByLogins()↓Display trades
+    
+    
+    
+    Phase 4 — Journal Engine
+    Retrieve available logs↓Normalize↓Correlate↓Timeline
+    This phase must first verify the exact journal/log retrieval API.
+    
+    
+    
+    Phase 5 — Metrics Engine
+    LatencySlippageSpreadExecutionDuration
+    All deterministic.
+    
+    
+    
+    Phase 6 — AI
+    Investigation↓Structured context↓AI↓Explanation↓Evidence↓Confidence
+    
+    
+    
+    Phase 7 — Production Hardening
+    Security audit
+    Load testing
+    Connector stress testing
+    Failure recovery
+    Monitoring
+    Logging
+    Backup
+    Deployment
+    Documentation
+    
+    
+    
+    
+    15. Next Steps
+    The first coding sequence should be:
+    1. Create repository2. Create frontend3. Create NestJS backend4. Create Python MT5 connector5. Create PostgreSQL database6. Implement authentication7. Implement broker model8. Implement encrypted broker credentials9. Implement connector health endpoint10. Implement MT5 Test Connection11. Test with real Manager credentials12. Implement connection pool13. Implement UserGet()14. Implement DealRequestByLogins()15. Build Client Explorer16. Build Trade Explorer17. Verify Journal API capability18. Build Journal Engine19. Build Metrics Engine20. Build AI Investigation Engine
+    
+    
+    
+    SUPPORTING TECHNICAL SPECIFICATION
+    
+    A. Repository Structure
+    Recommended monorepo:
+    mt5-ai-journal-analyzer/├── frontend/│├── backend/│├── mt5-connector/│├── docs/│├── infrastructure/│├── docker-compose.yml│├── README.md│├── .env.example│└── .gitignore
+    
+    
+    
+    
+    B. Backend Structure
+    backend/src/auth/users/brokers/clients/trades/journal/investigations/metrics/ai/audit/connector/common/config/
+    
+    
+    
+    C. Connector Structure
+    mt5-connector/app/├── main.py│├── config/│├── api/│├── providers/│   ├── base.py│   ├── real.py│   └── mock.py│├── mt5/│   ├── session_pool.py│   ├── manager.py│   ├── users.py│   ├── deals.py│   ├── positions.py│   ├── orders.py│   └── journal.py│├── models/│├── security/│└── services/
+    
+    
+    
+    D. Connector Modes
+    Implement:
+    REALMOCK
+    
+    REAL
+    Connects to actual MT5 brokers.
+    
+    
+    MOCK
+    Returns controlled synthetic data.
+    Mock mode is required for:
+    Development
+    Testing
+    CI/CD
+    UI development
+    Demonstrations
+    The supplied architecture explicitly recommends a mock provider so development does not always require live MT5 connectivity.
+    
+    
+    
+    
+    E. Connector API
+    Internal connector endpoints should include approximately:
+    GET  /healthPOST /connections/testPOST /connections/connectPOST /connections/disconnectGET  /connections/:id/statusGET  /users/:loginGET  /users/:login/dealsGET  /users/:login/positionsGET  /users/:login/ordersGET  /users/:login/journal
+    The final journal endpoint must only be implemented after verifying the actual SDK capability.
+    
+    
+    
+    F. Security Model
+    Frontend:
+    User ↓JWT ↓NestJS
+    NestJS:
+    Encrypted Broker Credentials ↓Decrypt only when needed ↓Connector
+    Connector:
+    X-Connector-Secret+HTTPS/private network
+    Never send the Manager password to the browser.
+    Never return the Manager password in API responses.
+    Never log the password.
+    
+    
+    
+    G. Connection Pool
+    Use:
+    Broker Connection ID        ↓Session Pool        ↓ManagerAPI instance
+    Do not use plaintext credentials as a persistent cache key.
+    The connection pool must track:
+    connectionIdbrokerIdservermanagerLoginstatuscreatedAtlastUsedAtlastHeartbeatAtlastError
+    The supplied architecture recommends connection reuse and a heartbeat because initial Manager connections are expensive.
+    
+    
+    
+    H. Pump Modes
+    Use the minimum pump mode necessary.
+    Primary connection:
+    PUMP_MODE_USERS
+    Use:
+    PUMP_MODE_TRADES
+    when active positions/orders are required.
+    Avoid:
+    PUMP_MODE_FULL
+    unless there is a demonstrated requirement.
+    The integration guide warns that full synchronization can increase server/network load.
+    
+    
+    
+    I. Trade Reconstruction
+    MT5 deals are flat transaction records.
+    They must be transformed into logical investigations.
+    Basic process:
+    Deals ↓Filter administrative transactions ↓Group by PositionID ↓Identify ENTRY_IN ↓Identify ENTRY_OUT ↓Identify ENTRY_INOUT ↓Build logical trade
+    Financial calculation:
+    Net Profit =Profit+Storage+Commission+Fee
+    This reconstruction approach is documented in the supplied MT5 integration guide.
+    
+    
+    
+    J. Journal Processing Architecture
+    Do NOT send raw journal data directly to AI.
+    Use:
+    MT5 Journal / Events        ↓Raw Event Parser        ↓Normalized Event        ↓Event Correlation        ↓Trade Investigation        ↓Metrics Engine        ↓AI Context Builder        ↓AI
+    
+    
+    
+    K. Normalized Event Model
+    Possible event types:
+    REQUEST_CREATEDREQUEST_ROUTEDDEALER_REQUEST_RECEIVEDDEALER_CONFIRMEDORDER_ACCEPTEDORDER_REJECTEDORDER_CANCELLEDDEAL_EXECUTEDPOSITION_OPENEDPOSITION_CLOSEDCONNECTION_EVENTPRICE_EVENTERROR_EVENTUNKNOWN_EVENT
+    The parser must preserve the original raw message.
+    Example:
+    {  &quot;eventType&quot;: &quot;DEAL_EXECUTED&quot;,  &quot;timestamp&quot;: &quot;...&quot;,  &quot;login&quot;: 259713,  &quot;symbol&quot;: &quot;XAUUSD.r&quot;,  &quot;side&quot;: &quot;BUY&quot;,  &quot;volume&quot;: 0.01,  &quot;price&quot;: 4275.75,  &quot;rawMessage&quot;: &quot;deal performed for &#39;259713&#39;...&quot;}
+    
+    
+    
+    L. AI Investigation Output
+    AI should return structured output.
+    Example:
+    {  &quot;summary&quot;: &quot;...&quot;,  &quot;timeline&quot;: [],  &quot;findings&quot;: [],  &quot;rootCause&quot;: &quot;...&quot;,  &quot;evidence&quot;: [],  &quot;metrics&quot;: {},  &quot;clientExplanation&quot;: &quot;...&quot;,  &quot;technicalExplanation&quot;: &quot;...&quot;,  &quot;confidence&quot;: 0.94}
+    AI must clearly distinguish:
+    FACTINFERENCEPOSSIBLE CAUSEUNKNOWN
+    
+    
+    
+    M. AI Cost-Control Strategy
+    This is extremely important.
+    A client can generate thousands of journal events.
+    Never:
+    100,000 journal lines        ↓       AI
+    Instead:
+    100,000 raw events        ↓Filter by client        ↓Filter by time        ↓Filter by selected trade        ↓Correlate identifiers        ↓Deduplicate        ↓Summarize repetitive events        ↓Calculate metrics        ↓AI
+    AI should normally operate on one investigation at a time.
+    
+    
+    
+    N. Investigation UI
+    The main investigation screen should contain:
+    ┌──────────────────────────────────────────┐│ Trade Investigation                      │├──────────────────────────────────────────┤│ Client: 259713                           ││ Symbol: XAUUSD.r                         ││ Direction: BUY                           ││ Volume: 0.01                             │├──────────────────────────────────────────┤│                                          ││ Timeline                                 ││                                          ││ 11:53:45.149  Request                    ││ 11:53:45.149  Dealer routing             ││ 11:53:45.150  Dealer received            ││ 11:53:45.152  Confirmation               ││ 11:53:45.152  Execution                  ││                                          │├──────────────────────────────────────────┤│ Metrics                                  ││                                          ││ Request → Dealer      1 ms               ││ Dealer → Confirm      2 ms               ││ Total Execution       3 ms               ││ Slippage              +0.01              ││                                          │├──────────────────────────────────────────┤│ AI Analysis                             ││                                          ││ [ Analyze Investigation ]                │└──────────────────────────────────────────┘
+    
+    
+    
+    O. Raw Journal View
+    Always allow users to see the original data.
+    AI interpretation must never replace the source.
+    Tabs:
+    OverviewTimelineMetricsRaw EventsAI AnalysisNotes
+    
+    
+    
+    P. Evidence-Based AI
+    If AI says:
+    “The trade experienced approximately 3 ms execution latency.”
+    The application should be able to show:
+    Evidence:Request:11:53:45.149Confirmation:11:53:45.152Calculated latency:3 ms
+    AI should not invent metrics.
+    
+    
+    
+    Q. Audit Logging
+    Log:
+    User login
+    Broker creation
+    Broker connection
+    Broker disconnection
+    Client searches
+    Trade queries
+    Journal queries
+    AI analysis requests
+    Investigation creation
+    Export
+    Permission changes
+    Never log:
+    Manager passwords
+    Encryption keys
+    AI API keys
+    Sensitive secrets
+    
+    
+    
+    R. Critical Development Rules
+    
+    Rule 1
+    Never invent an MT5 API.
+    If an API is not found in the supplied SDK documentation:
+    STOP↓Verify documentation↓Report limitation↓Find supported alternative
+    
+    
+    
+    Rule 2
+    Never modify production MT5 data.
+    The product is read-only.
+    
+    
+    
+    Rule 3
+    Never send massive raw logs to AI.
+    
+    
+    
+    Rule 4
+    Never calculate important numerical metrics using AI.
+    
+    
+    
+    Rule 5
+    Never expose Manager credentials to frontend.
+    
+    
+    
+    Rule 6
+    Never use PUMP_MODE_FULL without a clear reason.
+    
+    
+    
+    Rule 7
+    Never create a new MT5 Manager connection for every API request.
+    
+    
+    
+    Rule 8
+    Never perform concurrent unsynchronized calls against the same native Manager API instance.
+    
+    
+    
+    
+    S. MT5 API Reference — Initial Priority
+    The coding AI should prioritize understanding these APIs/classes from the supplied MT5 documentation:
+    MT5Manager.ManagerAPIMT5Manager.MTUserMT5Manager.MTDealPosition APIsOrder APIsRequest APIsGroup APIsSymbol APIsDealer APIsHistory APIs
+    Most important methods/capabilities initially:
+    ManagerAPI()Connect()Disconnect()LastError()UserGet()DealRequestByLogins()PositionGet()OrderGet()
+    The exact names/signatures must always be verified against the installed SDK.
+    
+    
+    
+    T. Reference DLL
+    The expected Manager API native library is:
+    MT5APIManager64.dll
+    This is the 64-bit native Manager API library.
+    Do not confuse it with:
+    MT5APIClient64.dll
+    The Client API is a different integration path and is not the architecture for this project.
+    The supplied integration guide explicitly distinguishes Manager and Client DLLs.
+    
+    
+    
+    U. Development Environment
+    Recommended:
+    Windows 10/11 or Windows ServerPython 3.10–3.13Node.js LTSPostgreSQLRedisGitDocker where appropriate
+    The MT5 Connector specifically requires Windows because of the native Manager DLL dependency.
+    
+    
+    
+    V. Git Strategy
+    Branches:
+    maindevelopfeature/authfeature/broker-connectionfeature/mt5-connectorfeature/client-searchfeature/trade-explorerfeature/journal-enginefeature/metricsfeature/ai
+    Commit format:
+    feat:fix:refactor:test:docs:chore:
+    Never directly commit experimental/broken code to main.
+    
+    
+    
+    W. Testing Strategy
+    
+    Unit Tests
+    Test:
+    Event parser
+    Trade reconstruction
+    Metrics
+    AI context builder
+    Credential encryption
+    Validation
+    
+    
+    
+    Integration Tests
+    Test:
+    NestJS ↔ Connector
+    Connector ↔ MT5 Manager API
+    PostgreSQL
+    Redis
+    
+    
+    
+    E2E
+    Test:
+    Login ↓Add Broker ↓Test Connection ↓Connect ↓Search Client ↓Select Time Range ↓Load Trades ↓Select Trade ↓Load Investigation ↓AI Analysis
+    
+    
+    
+    
+    X. First Development Task
+    Do NOT start by implementing AI.
+    Do NOT start by implementing journal parsing.
+    Do NOT start by building the entire dashboard.
+    First implement:
+    PROJECT FOUNDATION↓NestJS Backend+React Frontend+PostgreSQL+Redis+Python FastAPI MT5 Connector↓Connector Health Check↓MT5 Test Connection↓Real Manager API Connection
+    The first real success condition is:
+    User enters:Broker NameServerManager LoginManager Password↓Click &quot;Test Connection&quot;↓Backend↓MT5 Connector↓MT5Manager.ManagerAPI()↓Connect()↓Successful connection↓Return:Connected = trueServerManager LoginConnection latency
+    Only after this works against a real MT5 Manager account should development proceed to client retrieval and trade history.
+    
+    
+    
+    Y. Important Instruction to the Coding AI
+    This project already has a defined architecture.
+    Do not repeatedly redesign the architecture unless a technical limitation requires it.
+    Do not replace NestJS with another backend.
+    Do not replace the Python Windows connector with direct Node.js DLL calls unless the project owner explicitly approves the change.
+    Do not invent Manager API functions.
+    Do not assume that a trade/deal API is equivalent to a journal API.
+    Do not claim journal retrieval is implemented until the exact SDK capability has been verified.
+    When documentation is missing, state:
+    “This capability has not yet been verified against the installed MT5 Manager SDK.”
+    Then investigate the documentation/code before implementing it.
+    
+    
+    
+    Z. Immediate Roadmap
+    The coding AI should now execute:
+    
+    STEP 1
+    Create repository structure.
+    
+    
+    STEP 2
+    Create React frontend.
+    
+    
+    STEP 3
+    Create NestJS backend.
+    
+    
+    STEP 4
+    Create PostgreSQL/Prisma configuration.
+    
+    
+    STEP 5
+    Create Redis configuration.
+    
+    
+    STEP 6
+    Create Python FastAPI MT5 Connector.
+    
+    
+    STEP 7
+    Create connector mock provider.
+    
+    
+    STEP 8
+    Create connector health endpoint.
+    
+    
+    STEP 9
+    Implement MT5Manager.ManagerAPI.
+    
+    
+    STEP 10
+    Implement real Connect().
+    
+    
+    STEP 11
+    Implement LastError() handling.
+    
+    
+    STEP 12
+    Implement secure broker credentials.
+    
+    
+    STEP 13
+    Implement connection pooling and serialized Manager API access.
+    
+    
+    STEP 14
+    Implement UserGet().
+    
+    
+    STEP 15
+    Implement DealRequestByLogins().
+    
+    
+    STEP 16
+    Build client explorer.
+    
+    
+    STEP 17
+    Build trade explorer.
+    
+    
+    STEP 18
+    Verify journal/log retrieval capability from the SDK.
+    
+    
+    STEP 19
+    Build journal normalization/correlation.
+    
+    
+    STEP 20
+    Build metrics engine.
+    
+    
+    STEP 21
+    Build AI investigation.
+    
+    
+    
+    
+    FINAL PRODUCT PRINCIPLE
+    The platform must transform this:
+    Hundreds/thousands of confusing MT5 logs
+    into this:
+    CLIENT259713TRADEBUY 0.01 XAUUSD.rREQUEST11:53:45.149DEALER RECEIVED11:53:45.150CONFIRMED11:53:45.152EXECUTED11:53:45.152EXECUTION LATENCY3 msREQUESTED PRICE4275.74EXECUTED PRICE4275.75SLIPPAGE+0.01STATUSSuccessfully executedAI EXPLANATIONThe client&#39;s buy request was routed to the dealer,confirmed approximately 1–2 ms later, and executedat 4275.75. The requested price was 4275.74,resulting in a 0.01 price difference. No abnormaldelay is indicated by the available events.
+    The AI must only make conclusions that are supported by the retrieved data.
+    The raw MT5 evidence must always remain available.
+    The system must remain read-only toward production MT5 infrastructure.
+    The platform’s core value is:
+    
+    
+    Raw MT5 Data → Understandable Investigation → Evidence-Based Explanation
+    
+    
+      
+        
+                
+        
+        
+              
+      
+    
+  
+
