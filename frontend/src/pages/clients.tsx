@@ -74,6 +74,9 @@ export default function ClientsPage() {
     onSuccess: (data) => {
       navigate(`/investigations/${data.id}`);
     },
+    onError: (error: any) => {
+      alert(`Investigation Error: ${error.message}`);
+    },
   });
 
   const handleExportCSV = () => {
@@ -186,8 +189,8 @@ export default function ClientsPage() {
     },
     enabled: !!activeQuery,
     retry: false,
-    staleTime: 0,
-    gcTime: 0,
+    staleTime: Infinity,
+    gcTime: 15 * 60 * 1000,
   });
 
   // Query Client Trades history
@@ -207,8 +210,8 @@ export default function ClientsPage() {
     },
     enabled: !!activeQuery && !!clientProfile,
     retry: false,
-    staleTime: 0,
-    gcTime: 0,
+    staleTime: Infinity,
+    gcTime: 15 * 60 * 1000,
   });
 
   // Reset pagination and tab on query or trades reload

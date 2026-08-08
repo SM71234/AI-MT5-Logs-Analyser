@@ -250,6 +250,40 @@ export class NormalizationEngine {
         },
       }),
     },
+    // 12. Dealer/Server reject error: [Trade] '1': reject (Request error) for 'login' (for 'login' buy/sell volume symbol at priceRequested)
+    {
+      type: 'ORDER_REJECTED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+reject\s+\((.+?)\)\s+for\s+'(\d+)'\s+\(for\s+'\d+'\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)\)/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[4],
+        metadata: {
+          action: match[5].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[6]),
+          symbol: match[7],
+          priceRequested: parseFloat(match[8]),
+          rejectedBy: `Dealer/Server #${match[2]}`,
+          rawReason: match[3].trim(),
+        },
+      }),
+    },
+    // 13. Alternative Margin rejection: [Trade] '1001': not enough money on 'login' [for 'login' buy/sell volume symbol at price]
+    {
+      type: 'ORDER_REJECTED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+not\s+enough\s+money\s+on\s+'(\d+)'\s+\[for\s+'\d+'\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)\]/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[3],
+        metadata: {
+          action: match[4].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[5]),
+          symbol: match[6],
+          priceRequested: parseFloat(match[7]),
+          rejectedBy: 'Risk Management System',
+          rawReason: 'Not enough money',
+        },
+      }),
+    },
   ];
 
   normalize(rawLine: string): NormalizedEvent | null {
