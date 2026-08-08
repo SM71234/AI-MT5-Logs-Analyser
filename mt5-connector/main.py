@@ -234,18 +234,17 @@ MOCK_JOURNALS = {
         "2026-08-06T16:45:07.250Z [Trade] '4004': request transferred to dealers",
         "2026-08-06T16:45:10.500Z [Dealer] dealer #12 accepted market sell 10.00 USDJPY at 142.080",
         "2026-08-06T16:45:10.800Z [Trade] '4004': deal performed #8001 sell 10.00 USDJPY at 142.080"
-    ],
     "5005": [
-        "2026-08-06T17:00:00.120Z [Trade] '5005': market buy 10.00 EURUSD (requested at 1.10200)",
+        "2026-08-06T17:00:00.120Z [Trade] '1001': order placed for execution for '5005' [#9005 buy 10.00 EURUSD at 1.10200]",
         "2026-08-06T17:00:00.125Z [Trade] '5005': request rejected: not enough money"
     ],
     "6006": [
-        "2026-08-06T18:00:00.310Z [Trade] '6006': market buy 1.00 GBPUSD (requested at 1.28400)",
+        "2026-08-06T18:00:00.310Z [Trade] '1001': order placed for execution for '6006' [#9006 buy 1.00 GBPUSD at 1.28400]",
         "2026-08-06T18:00:00.320Z [Trade] '6006': request transferred to dealers",
         "2026-08-06T18:00:00.350Z [Dealer] dealer #8 rejected buy 1.00 GBPUSD at 1.28400 (dealer rejection)"
     ],
     "7007": [
-        "2026-08-06T19:00:00.550Z [Trade] '7007': market buy 1.00 USDJPY (requested at 142.100)",
+        "2026-08-06T19:00:00.550Z [Trade] '1001': order placed for execution for '7007' [#9007 buy 1.00 USDJPY at 142.100]",
         "2026-08-06T19:00:00.555Z [Trade] '7007': request rejected: market closed"
     ]
 }
@@ -438,6 +437,32 @@ def get_user_trades(login: str, request: Request):
                 else:  # ENTRY_OUT or ENTRY_INOUT
                     positions_map[pid]["close_deals"].append(deal)
 
+            executed_order_ids = set()
+            for deal in (deals or []):
+                oid = getattr(deal, "Order", 0) or 0
+                if oid > 0:
+                    executed_order_ids.add(oid)
+
+            # Local symbols cache to query each unique symbol only once and optimize load speed
+            symbol_specs = {}
+            unique_symbols = set()
+            for pid, pos in positions_map.items():
+                open_deal = pos["open_deal"] or pos["all_deals"][0]
+                sym = getattr(open_deal, "Symbol", "")
+                if sym:
+                    unique_symbols.add(sym)
+            for order in (orders or []):
+                oid = getattr(order, "Order", 0) or 0
+                if oid > 0 and oid not in executed_order_ids:
+                    sym = getattr(order, "Symbol", "")
+                    if sym:
+                        unique_symbols.add(sym)
+
+            with _LOCK:
+                for sym in unique_symbols:
+                    if sym:
+                        symbol_specs[sym] = get_symbol_spec(manager, creds["server"], sym)
+
             trades = []
             for pid, pos in positions_map.items():
                 all_deals = pos["all_deals"]
@@ -499,9 +524,8 @@ def get_user_trades(login: str, request: Request):
                     
                 close_delay = max(close_deal_time_msc - close_order_setup_msc, 0) / 1000.0
                 
-                # Fetch dynamically or from cache
-                with _LOCK:
-                    digits, point = get_symbol_spec(manager, creds["server"], symbol)
+                # Look up from pre-fetched local cache
+                digits, point = symbol_specs.get(symbol, (None, None))
                 
                 # Calculate raw price differences
                 open_req = price_map.get(open_oid, getattr(open_deal, "Price", 0.0)) or getattr(open_deal, "Price", 0.0)
@@ -652,11 +676,6 @@ def get_user_trades(login: str, request: Request):
                 })
             
             # Now, append unexecuted/rejected orders from History Orders list
-            executed_order_ids = set()
-            for deal in deals:
-                oid = getattr(deal, "Order", 0) or 0
-                if oid > 0:
-                    executed_order_ids.add(oid)
 
             for order in (orders or []):
                 oid = getattr(order, "Order", 0) or 0
@@ -679,9 +698,8 @@ def get_user_trades(login: str, request: Request):
                     price_req = getattr(order, "PriceOrder", 0.0) or getattr(order, "PriceTrigger", 0.0) or 0.0
                     latency_ms = max(done_msc - setup_msc, 0)
                     
-                    # Fetch dynamically or from cache
-                    with _LOCK:
-                        digits, point = get_symbol_spec(manager, creds["server"], symbol)
+                    # Look up from pre-fetched local cache
+                    digits, point = symbol_specs.get(symbol, (None, None))
 
                     entry_metrics = {
                         "action": action,

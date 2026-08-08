@@ -153,6 +153,7 @@ export default function ClientsPage() {
   const [tradeTypeTab, setTradeTypeTab] = useState<'executed' | 'rejected'>('executed');
   const [currentPage, setCurrentPage] = useState(1);
   const [pageSize, setPageSize] = useState(10);
+  const [savingTicketId, setSavingTicketId] = useState<string | null>(null);
 
   // Fetch brokers list for dropdown selection
   const { data: brokers } = useQuery<Broker[]>({
@@ -569,15 +570,20 @@ export default function ClientsPage() {
                             
                             <td className="p-4 text-right">
                               <button
-                                onClick={() => createInvestigationMutation.mutate({
-                                  brokerId: activeQuery!.brokerId,
-                                  login: activeQuery!.login,
-                                  ticket: trade.ticket
-                                })}
+                                onClick={() => {
+                                  setSavingTicketId(trade.ticket);
+                                  createInvestigationMutation.mutate({
+                                    brokerId: activeQuery!.brokerId,
+                                    login: activeQuery!.login,
+                                    ticket: trade.ticket
+                                  }, {
+                                    onSettled: () => setSavingTicketId(null)
+                                  });
+                                }}
                                 disabled={createInvestigationMutation.isPending}
                                 className="inline-flex items-center gap-1 rounded bg-zinc-900 border border-zinc-800 px-2.5 py-1 text-[10px] font-semibold text-zinc-300 hover:bg-zinc-800 hover:text-zinc-50 transition disabled:opacity-50"
                               >
-                                <span>{createInvestigationMutation.isPending ? 'Saving...' : 'Investigate'}</span>
+                                <span>{createInvestigationMutation.isPending && savingTicketId === trade.ticket ? 'Saving...' : 'Investigate'}</span>
                               </button>
                             </td>
                           </tr>
