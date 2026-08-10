@@ -46,6 +46,17 @@ describe('InvestigationsService', () => {
 
     const mockMetricsService = {
       calculate: jest.fn(),
+      analyzeExecution: jest.fn().mockImplementation((entry, exit) => ({
+        entryExecution: entry,
+        exitExecution: exit,
+        netSlippage: { slippagePoints: entry?.slippagePoints || 0, slippageType: entry?.slippageType || 'Zero' },
+        grossAdverseSlippage: entry?.slippageType === 'Adverse' ? entry?.slippagePoints || 0 : 0,
+        grossFavorableSlippage: entry?.slippageType === 'Favorable' ? entry?.slippagePoints || 0 : 0,
+        entryLatency: entry?.executionLatencyMs || null,
+        exitLatency: exit?.executionLatencyMs || null,
+        cumulativeLatency: (entry?.executionLatencyMs || 0) + (exit?.executionLatencyMs || 0),
+        averageLatency: entry?.executionLatencyMs || null,
+      })),
     };
 
     const mockAiService = {

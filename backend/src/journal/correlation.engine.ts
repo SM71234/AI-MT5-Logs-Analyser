@@ -160,6 +160,9 @@ export class CorrelationEngine {
         const t = new Date(e.timestamp).getTime();
         if (t < submitTime || t - submitTime > 15050) return false;
 
+        // Try exact order ID matching if available
+        if (orderId && e.metadata.orderId === orderId) return true;
+
         if (e.eventType === 'ORDER_REJECTED') {
           return e.login === login;
         } else { // DEALER_REJECTED

@@ -29,7 +29,13 @@ export class AiService {
     if (!this.apiKey || this.apiKey === 'your-openai-api-key') {
       this.logger.warn('OPENAI_API_KEY is missing or configured as default template. Serving simulated AI report.');
       await new Promise((resolve) => setTimeout(resolve, 1500)); // simulated latency
-      return this.generateMockAiResponse(login, ticketId, symbol, action, volume, metrics);
+      const mockReport = this.generateMockAiResponse(login, ticketId, symbol, action, volume, metrics);
+      const validation = this.validateAiReport(mockReport, metrics);
+      if (!validation.isValid) {
+        this.logger.warn(`Mock AI validation failed: ${validation.reason}. Falling back to deterministic report.`);
+        return this.generateDeterministicFallbackReport(login, ticketId, symbol, action, volume, metrics);
+      }
+      return mockReport;
     }
 
     try {
@@ -61,7 +67,14 @@ export class AiService {
       }
 
       const body = await res.json();
-      return body.choices[0].message.content;
+      const rawText = body.choices[0].message.content || '';
+      
+      const validation = this.validateAiReport(rawText, metrics);
+      if (!validation.isValid) {
+        this.logger.warn(`AI validation failed: ${validation.reason}. Falling back to deterministic report.`);
+        return this.generateDeterministicFallbackReport(login, ticketId, symbol, action, volume, metrics);
+      }
+      return rawText;
     } catch (error: any) {
       this.logger.error('Failed to contact OpenAI API completions', error);
       throw new InternalServerErrorException(`AI Analysis service failed: ${error.message}`);
@@ -71,22 +84,39 @@ export class AiService {
   // Conducts follow-up chats in investigation contexts
   async followUpChat(
     reportText: string,
+    canonicalResult: any,
     previousChatHistory: { role: 'user' | 'assistant'; content: string }[],
     userQuestion: string,
   ): Promise<string> {
     if (!this.apiKey || this.apiKey === 'your-openai-api-key') {
       await new Promise((resolve) => setTimeout(resolve, 800));
-      return `[Mock AI Response] This is a follow-up answer explaining details about the trade incident logs. (Install a valid OpenAI Key in your environments to enable live follow-up queries)`;
+      const status = canonicalResult?.status || 'UNKNOWN';
+      const isRejected = canonicalResult?.rejection?.isRejected || false;
+      if (isRejected) {
+        return `[Mock AI Response] The trade status is deterministically ${status}. It was rejected by ${canonicalResult.rejection.rejectedBy} at the "${canonicalResult.rejection.failedStage}" stage due to: "${canonicalResult.rejection.reason}". Rejection latency was ${canonicalResult.rejection.rejectionLatencyMs} ms.`;
+      } else {
+        return `[Mock AI Response] The trade status is deterministically ${status}. It executed successfully at price ${canonicalResult.execution?.executionPrice} with ${canonicalResult.execution?.slippagePips} pips slippage. Execution latency was ${canonicalResult.execution?.executionLatencyMs} ms.`;
+      }
     }
+
+    const systemPrompt = `You are MT5 AI Journal Analyzer, a senior compliance desk assistant. 
+Answer questions about the trade dispute based ONLY on the following deterministic Canonical Result and report text.
+
+Deterministic Canonical Result:
+${JSON.stringify(canonicalResult, null, 2)}
+
+Report Text:
+${reportText}
+
+CRITICAL RULES:
+1. Do not invent, assume, or deduce parameters or events outside the provided data.
+2. If the user asks about latencies, slippage, execution prices, or rejection reasons, cite the Canonical Result fields exactly.
+3. If the answer cannot be determined from the provided data, state clearly: "Based on the deterministic logs, this details cannot be determined."`;
 
     const messages = [
       {
         role: 'system' as const,
-        content: 'You are MT5 AI Journal Analyzer. Answer questions about the trade dispute based ONLY on the analysis report details. If the answer cannot be inferred, state that logs do not contain that details.',
-      },
-      {
-        role: 'user' as const,
-        content: `Here is the investigation report of the trade dispute:\n\n${reportText}`,
+        content: systemPrompt,
       },
       ...previousChatHistory,
       {
@@ -149,10 +179,11 @@ Action: ${action}
 Volume: ${volume} Lot(s)
 
 Deterministic Metrics:
-- Trade Status: ${metrics.rejection?.isRejected ? 'REJECTED' : 'EXECUTED'}
-- Total Execution Duration: ${metrics.executionLatencyMs} ms
+- Trade Status: ${metrics.status}
+- Total Execution Duration: ${metrics.executionLatencyMs !== null ? `${metrics.executionLatencyMs} ms` : 'N/A'}
+- Rejection Latency: ${metrics.rejectionLatencyMs !== null ? `${metrics.rejectionLatencyMs} ms` : 'N/A'}
 - Dealer Queuing Delay: ${metrics.dealerLatencyMs} ms
-- Execution Slippage: ${metrics.slippagePips} pips (Price delta: ${metrics.priceDelta})
+- Execution Slippage: ${metrics.slippagePips !== null ? `${metrics.slippagePips} pips` : 'N/A'} (Price delta: ${metrics.priceDelta})
 - Requotes Count: ${metrics.requoteCount}
 - Retries Count: ${metrics.retryCount}
 - Manual Dealer ID: ${metrics.dealerId || 'N/A'}
@@ -165,27 +196,110 @@ ${eventsFormatted}
 
 Analyze what occurred during this trade cycle. Identify if this is a Client, Dealer, Server, or Liquidity/Slippage issue.
 
-If the trade was rejected:
-Explain why it was rejected, which component (e.g. Server, Dealer Desk) rejected it, and list the evidence/logs supporting this.
-If the trade was executed successfully:
-Explain its execution pricing, slippage, and latencies.
+CRITICAL RULES:
+1. The AI explanation must never contradict the deterministic trade status of ${metrics.status}.
+2. Do not calculate or assert execution latency or slippage unless they are explicitly present as numbers above. If they are N/A, state that they are undetermined or not applicable.
+3. Never label rejection latency as execution latency.
+4. Do not invent root causes (like "server load" or "network issues") unless they are directly supported by the logs. If the logs are silent, state that the cause is indeterminate.
 
 You MUST write your report using Markdown, strictly formatted with the following headers:
 ### Summary
 (High-level operational overview of the transaction)
 
 ### Root Cause
-(Detailed cause: e.g. dealer latency, market volatility slippage, manual dealer requotes, insufficient margin rejection)
+(Detailed cause matching the deterministic facts)
 
 ### Evidence
-(Bulleted list referencing timestamps, raw log outputs, and calculated metrics)
+(List key log lines and deterministic metrics as evidence)
 
 ### Recommendation
-(Actions for support/risk desk: e.g., credit client's balance, reject claim because slippage matches quotes, check dealer performance, reject claim because margin was insufficient)
+(Action items for compliance desk or operations desk)
 
 ### Confidence
-[Low/Medium/High] with a one-sentence rationale.
+High. Simulated metrics show clear chronological milestones.
 `;
+  }
+
+  validateAiReport(reportText: string, metrics: CalculatedMetrics): { isValid: boolean; reason?: string } {
+    const isRejected = metrics.rejection?.isRejected || false;
+    const reportLower = reportText.toLowerCase();
+
+    if (isRejected) {
+      if (reportLower.includes('executed successfully') || reportLower.includes('execution was normal')) {
+        return { isValid: false, reason: 'AI claimed successful execution for a rejected trade' };
+      }
+    }
+
+    if (metrics.executionLatencyMs === null) {
+      const claimsExecutionLatency = /execution latency|total execution/i.test(reportText) && !/n\/a|not applicable|no execution/i.test(reportText);
+      if (claimsExecutionLatency) {
+        return { isValid: false, reason: 'AI asserted execution latency when execution did not occur' };
+      }
+    }
+
+    if (metrics.slippagePips === null) {
+      const claimsSlippage = /slippage of|slippage is/i.test(reportText) && !/n\/a|not applicable|no execution/i.test(reportText);
+      if (claimsSlippage) {
+        return { isValid: false, reason: 'AI asserted slippage metrics when execution did not occur' };
+      }
+    }
+
+    if (isRejected && !metrics.rejection?.rawReason) {
+      const inventsServerLoad = /server load|network delay|network issues/i.test(reportText);
+      if (inventsServerLoad) {
+        return { isValid: false, reason: 'AI invented root causes when no explicit log reason was present' };
+      }
+    }
+
+    return { isValid: true };
+  }
+
+  generateDeterministicFallbackReport(
+    login: string,
+    ticketId: string,
+    symbol: string,
+    action: string,
+    volume: number,
+    metrics: CalculatedMetrics,
+  ): string {
+    const isRejected = metrics.rejection?.isRejected || false;
+    let summary = '';
+    let rootCause = '';
+    let evidence = '';
+    let recommendation = '';
+
+    if (isRejected) {
+      const rej = metrics.rejection!;
+      summary = `Trade request by Client #${login} for ${volume} Lot ${symbol} was rejected.`;
+      rootCause = `Rejection occurred during the "${rej.failedStage}" stage by ${rej.rejectedBy}.`;
+      evidence = `- Status: REJECTED\n- Reason: ${rej.reason}\n- Raw Reason: ${rej.rawReason || 'N/A'}\n- Rejection Latency: ${metrics.rejectionLatencyMs ?? 'N/A'} ms`;
+      recommendation = `Review ${rej.failedStage} parameters and client margin limits.`;
+    } else if (metrics.status === 'INCOMPLETE') {
+      summary = `Trade request by Client #${login} for ${volume} Lot ${symbol} was not completed.`;
+      rootCause = `The log sequence terminated abruptly with no execution or rejection event.`;
+      evidence = `- Status: INCOMPLETE\n- Execution Latency: N/A\n- Slippage: N/A`;
+      recommendation = `Verify server logs to check if the request was routed successfully.`;
+    } else {
+      summary = `Trade request by Client #${login} for ${volume} Lot ${symbol} was successfully executed.`;
+      rootCause = `The order was filled normally.`;
+      evidence = `- Status: EXECUTED\n- Execution Latency: ${metrics.executionLatencyMs} ms\n- Slippage: ${metrics.slippagePips !== null ? `${metrics.slippagePips} pips` : 'N/A'}\n- Dealer Latency: ${metrics.dealerLatencyMs} ms`;
+      recommendation = `Close investigation case file. No further action is required.`;
+    }
+
+    return `### Summary
+${summary}
+
+### Root Cause
+${rootCause}
+
+### Evidence
+${evidence}
+
+### Recommendation
+${recommendation}
+
+### Confidence
+High. Generated deterministically from raw journal logs.`;
   }
 
   private generateMockAiResponse(
@@ -196,13 +310,13 @@ You MUST write your report using Markdown, strictly formatted with the following
     volume: number,
     metrics: CalculatedMetrics,
   ): string {
-    const isRejected = metrics.rejection?.isRejected;
+    const isRejected = metrics.rejection?.isRejected || false;
     const isNormal = metrics.isNormal;
-    const hasSlippage = metrics.slippagePips > 0;
+    const hasSlippage = metrics.slippagePips !== null && metrics.slippagePips > 0;
     const hasRequote = metrics.hasRequote;
     const isSlowDealer = metrics.dealerLatencyMs > 1000;
 
-    let summary = `Client ${login} executed a ${volume} Lot ${action} on ${symbol} (Ticket #${ticketId}). `;
+    let summary = `Client ${login} submitted a ${volume} Lot ${action} on ${symbol} (Ticket #${ticketId}). `;
     let rootCause = '';
     let evidence = '';
     let recommendation = '';
@@ -212,8 +326,13 @@ You MUST write your report using Markdown, strictly formatted with the following
       const rej = metrics.rejection!;
       summary = `Client ${login} placed a ${volume} Lot ${action} on ${symbol} (Ticket #${ticketId}), which was REJECTED. `;
       rootCause = `The trade request failed during the "${rej.failedStage}" stage. It was rejected by ${rej.rejectedBy} due to: "${rej.reason}".`;
-      evidence = `- Rejection Stage: ${rej.failedStage}\n- Rejected By: ${rej.rejectedBy}\n- Mapped Reason: ${rej.reason}\n- Raw Log Reason: ${rej.rawReason || 'N/A'}\n- Latency to rejection: ${metrics.executionLatencyMs} ms`;
+      evidence = `- Rejection Stage: ${rej.failedStage}\n- Rejected By: ${rej.rejectedBy}\n- Mapped Reason: ${rej.reason}\n- Raw Log Reason: ${rej.rawReason || 'N/A'}\n- Latency to rejection: ${metrics.rejectionLatencyMs} ms`;
       recommendation = `Inform the client that their trade was rejected due to ${(rej.reason || 'unknown reason').toLowerCase()}. No credit or adjustment is required.`;
+    } else if (metrics.status === 'INCOMPLETE') {
+      summary = `Client ${login} submitted a ${volume} Lot ${action} on ${symbol} (Ticket #${ticketId}), which remains incomplete.`;
+      rootCause = `The transaction shows submission but no subsequent server execution or rejection events.`;
+      evidence = `- Status: INCOMPLETE\n- Submission Price: ${metrics.priceRequested}\n- Completed Events: ORDER_SUBMITTED`;
+      recommendation = `Investigate connection stability between bridge gateways and MT5 administrator terminal.`;
     } else if (isNormal) {
       summary += 'Execution was normal, fast, and completed without slippage.';
       rootCause = 'No issue identified. Order was processed within limits.';

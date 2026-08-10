@@ -213,4 +213,67 @@ describe('MetricsService', () => {
     expect(metrics.reason).toBe('Symbol Digits/Point Size not available');
     expect(metrics.priceDelta).toBe(0.5);
   });
+
+  it('should handle rejected trade: executionLatencyMs is null, rejectionLatencyMs is calculated, status is REJECTED', () => {
+    const incident: CorrelatedIncident = {
+      ticketId: '659',
+      login: '910102',
+      symbol: 'BTCUSD.s',
+      action: 'BUY',
+      volume: 0.1,
+      events: [
+        {
+          timestamp: '2026-08-07T10:00:00.000Z',
+          eventType: 'ORDER_SUBMITTED',
+          rawMessage: 'submit',
+          login: '910102',
+          metadata: { priceRequested: 60000 },
+        },
+        {
+          timestamp: '2026-08-07T10:00:00.250Z',
+          eventType: 'ORDER_REJECTED',
+          rawMessage: 'order rejected due to not enough money',
+          login: '910102',
+          metadata: { rawReason: 'not enough money' },
+        },
+      ],
+    };
+
+    const metrics = service.calculate(incident, 2, 0.01);
+
+    expect(metrics.executionLatencyMs).toBeNull();
+    expect(metrics.rejectionLatencyMs).toBe(250);
+    expect(metrics.status).toBe('REJECTED');
+    expect(metrics.executed).toBe(false);
+    expect(metrics.rejection?.isRejected).toBe(true);
+    expect(metrics.rejection?.reason).toBe('Insufficient margin');
+    expect(metrics.rejection?.rejectedBy).toBe('MT5 Server (Margin Validation)');
+    expect(metrics.rejection?.failedStage).toBe('Server Validation');
+  });
+
+  it('should handle incomplete trade: executionLatencyMs is null, status is INCOMPLETE', () => {
+    const incident: CorrelatedIncident = {
+      ticketId: '660',
+      login: '910102',
+      symbol: 'BTCUSD.s',
+      action: 'BUY',
+      volume: 0.1,
+      events: [
+        {
+          timestamp: '2026-08-07T10:00:00.000Z',
+          eventType: 'ORDER_SUBMITTED',
+          rawMessage: 'submit',
+          login: '910102',
+          metadata: { priceRequested: 60000 },
+        },
+      ],
+    };
+
+    const metrics = service.calculate(incident, 2, 0.01);
+
+    expect(metrics.executionLatencyMs).toBeNull();
+    expect(metrics.rejectionLatencyMs).toBeNull();
+    expect(metrics.status).toBe('INCOMPLETE');
+    expect(metrics.executed).toBe(false);
+  });
 });

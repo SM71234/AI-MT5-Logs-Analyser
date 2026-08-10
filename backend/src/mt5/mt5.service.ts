@@ -1,6 +1,7 @@
 import { Injectable, Logger, BadGatewayException, NotFoundException } from '@nestjs/common';
 import { ConfigService } from '@nestjs/config';
 import { BrokersService } from '../brokers/brokers.service';
+import { MetricsService } from '../metrics/metrics.service';
 
 @Injectable()
 export class Mt5Service {
@@ -10,6 +11,7 @@ export class Mt5Service {
   constructor(
     private readonly configService: ConfigService,
     private readonly brokersService: BrokersService,
+    private readonly metricsService: MetricsService,
   ) {
     this.connectorUrl = this.configService.get<string>('MT5_CONNECTOR_URL', 'http://localhost:4500');
   }
@@ -85,7 +87,14 @@ export class Mt5Service {
       }
 
       const body = await res.json();
-      return body.data;
+      const rawTrades = body.data || [];
+      return rawTrades.map((trade: any) => {
+        const analysis = this.metricsService.analyzeExecution(trade.entry, trade.exit);
+        return {
+          ...trade,
+          executionAnalysis: analysis,
+        };
+      });
     } catch (error) {
       this.logger.error(`Failed to fetch client trades for #${login}`, error);
       throw new BadGatewayException('Failed to communicate with MT5 Connector');

@@ -41,6 +41,7 @@ interface Trade {
   slippagePoints?: number | null;
   slippageType?: 'Adverse' | 'Favorable' | 'Zero';
   latencyMs?: number;
+  executionAnalysis?: any;
 
   timeRequested: string;
   timeExecuted: string;
@@ -497,7 +498,8 @@ export default function ClientsPage() {
                     </thead>
                     <tbody className="divide-y divide-zinc-900/50">
                       {paginatedTrades.map((trade) => {
-                        const hasHighLatency = trade.durationSeconds > 1.0;
+                        const latencyVal = trade.executionAnalysis?.averageLatency ?? trade.latencyMs ?? (trade.durationSeconds * 1000);
+                        const hasHighLatency = latencyVal >= 300;
 
                         return (
                           <tr key={trade.ticket} className="hover:bg-zinc-900/10 transition">
@@ -533,7 +535,29 @@ export default function ClientsPage() {
 
                             {/* Slippage Points + Raw Price Diff */}
                             <td className="p-4 text-right font-mono font-medium">
-                              {trade.slippagePoints !== undefined && trade.slippagePoints !== null ? (
+                              {trade.executionAnalysis?.netSlippage ? (
+                                <div className="flex flex-col items-end">
+                                  <span className={
+                                    trade.executionAnalysis.netSlippage.slippageType === 'Adverse' 
+                                      ? 'text-red-400 font-semibold' 
+                                      : trade.executionAnalysis.netSlippage.slippageType === 'Favorable' 
+                                      ? 'text-emerald-400 font-semibold' 
+                                      : 'text-zinc-500'
+                                  }>
+                                    {trade.executionAnalysis.netSlippage.slippageType === 'Adverse' ? '-' : trade.executionAnalysis.netSlippage.slippageType === 'Favorable' ? '+' : ''}
+                                    {trade.executionAnalysis.netSlippage.slippagePoints} pts {trade.executionAnalysis.netSlippage.slippageType === 'Adverse' ? 'Adverse' : trade.executionAnalysis.netSlippage.slippageType === 'Favorable' ? 'Favorable' : 'Zero'}
+                                  </span>
+                                  {trade.executionAnalysis.exitExecution ? (
+                                    <span className="text-[9px] text-zinc-500 font-normal">
+                                      Entry: {trade.executionAnalysis.entryExecution.slippagePoints}{trade.executionAnalysis.entryExecution.slippageType === 'Adverse' ? 'A' : trade.executionAnalysis.entryExecution.slippageType === 'Favorable' ? 'F' : 'Z'} | Exit: {trade.executionAnalysis.exitExecution.slippagePoints}{trade.executionAnalysis.exitExecution.slippageType === 'Adverse' ? 'A' : trade.executionAnalysis.exitExecution.slippageType === 'Favorable' ? 'F' : 'Z'}
+                                    </span>
+                                  ) : (
+                                    <span className="text-[9px] text-zinc-500 font-normal">
+                                      Entry: {trade.executionAnalysis.entryExecution.slippagePoints}{trade.executionAnalysis.entryExecution.slippageType === 'Adverse' ? 'A' : trade.executionAnalysis.entryExecution.slippageType === 'Favorable' ? 'F' : 'Z'}
+                                    </span>
+                                  )}
+                                </div>
+                              ) : trade.slippagePoints !== undefined && trade.slippagePoints !== null ? (
                                 <div className="flex flex-col items-end">
                                   <span className={
                                     trade.slippageType === 'Adverse' 
@@ -563,9 +587,20 @@ export default function ClientsPage() {
                             <td className={`p-4 text-right font-mono font-medium ${
                               hasHighLatency ? 'text-red-400' : 'text-zinc-400'
                             }`}>
-                              <div className="flex items-center justify-end gap-1.5">
-                                {hasHighLatency && <Clock className="h-3 w-3 text-red-500 animate-pulse" />}
-                                <span>{trade.latencyMs !== undefined ? trade.latencyMs.toFixed(0) : (trade.durationSeconds * 1000).toFixed(0)} ms</span>
+                              <div className="flex flex-col items-end justify-center">
+                                <div className="flex items-center justify-end gap-1.5">
+                                  {hasHighLatency && <Clock className="h-3 w-3 text-red-500 animate-pulse" />}
+                                  <span>
+                                    {trade.executionAnalysis?.averageLatency !== undefined && trade.executionAnalysis?.averageLatency !== null
+                                      ? `${trade.executionAnalysis.averageLatency.toFixed(0)} ms (avg)` 
+                                      : `${(trade.latencyMs ?? trade.durationSeconds * 1000).toFixed(0)} ms`}
+                                  </span>
+                                </div>
+                                {trade.executionAnalysis?.exitExecution && (
+                                  <span className="text-[9px] text-zinc-500 font-normal mt-0.5">
+                                    cum: {trade.executionAnalysis.cumulativeLatency.toFixed(0)} ms
+                                  </span>
+                                )}
                               </div>
                             </td>
 

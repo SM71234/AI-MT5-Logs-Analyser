@@ -37,6 +37,8 @@ export interface NormalizedEvent {
     orderId?: string;
     dealId?: string;
     rawReason?: string;
+    rule?: string;
+    requoteCount?: number;
   };
 }
 
@@ -45,6 +47,133 @@ export class NormalizationEngine {
   private readonly logger = new Logger('NormalizationEngine');
 
   private readonly patterns = [
+    // Direct submission: [Trade] '259713': order placed for execution [#6943681 sell 0.01 XAGUSD.i at market], time 1.10 ms
+    {
+      type: 'ORDER_SUBMITTED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+order\s+placed\s+for\s+execution\s+\[#(\d+)\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+(market|[\d\.]+)\]/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[2],
+        metadata: {
+          orderId: match[3],
+          action: match[4].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[5]),
+          symbol: match[6],
+          priceRequested: match[7].toLowerCase() === 'market' ? null : parseFloat(match[7]),
+        },
+      }),
+    },
+    // Direct order performed: [Trade] '259713': order performed buy 0.01 at 64.018 [#6943674 buy 0.01 XAGUSD.i at market]
+    {
+      type: 'ORDER_EXECUTED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+order\s+performed\s+(buy|sell)\s+([\d\.]+)\s+at\s+([\d\.]+)\s+\[#(\d+)\s+(?:buy|sell)\s+[\d\.]+\s+[\w\.-]+\s+at\s+(market|[\d\.]+)\]/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[2],
+        metadata: {
+          orderId: match[6],
+          action: match[3].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[4]),
+          priceExecuted: parseFloat(match[5]),
+          priceRequested: match[7].toLowerCase() === 'market' ? null : parseFloat(match[7]),
+        },
+      }),
+    },
+    // Direct order filled: [Trade] '259713': order #6943674 buy 0.01 / 0.01 XAGUSD.i at market filled due execution [filled order #6943674, buy 0.01 XAGUSD.i at 64 [based on deal '2524210']]
+    {
+      type: 'ORDER_EXECUTED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+order\s+#(\d+)\s+(buy|sell)\s+[\d\.]+\s+\/\s+[\d\.]+\s+[\w\.-]+\s+at\s+\w+\s+filled\s+due\s+execution\s+\[filled\s+order\s+#\d+,\s+(?:buy|sell)\s+[\d\.]+\s+[\w\.-]+\s+at\s+([\d\.]+)\s+\[based\s+on\s+deal\s+'(\d+)'\]\]/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[2],
+        metadata: {
+          orderId: match[3],
+          action: match[4].toUpperCase() as 'BUY' | 'SELL',
+          priceExecuted: parseFloat(match[5]),
+          dealId: match[6],
+        },
+      }),
+    },
+    // Real deal performed (for 'login'): [Trade] '1001': deal performed for '259713' [#6716101 sell 0.01 XAUUSD.r at 4261.44]
+    {
+      type: 'ORDER_EXECUTED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+.*'(\d+)':\s+deal\s+performed\s+for\s+'(\d+)'\s+\[#(\d+)\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)\]/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[3],
+        metadata: {
+          dealId: match[4],
+          action: match[5].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[6]),
+          symbol: match[7],
+          priceExecuted: parseFloat(match[8]),
+        },
+      }),
+    },
+    // Close order submitted: [Trade] '259713': market sell 0.01 XAGUSD.i, close #6943674 buy 0.01 XAGUSD.i 64.018 (63.972 / 63.997)
+    {
+      type: 'ORDER_SUBMITTED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+market\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+),\s+close\s+#(\d+)\s+(?:buy|sell)\s+[\d\.]+\s+[\w\.-]+\s+[\d\.]+\s+\(([\d\.]+)\s*\/\s*([\d\.]+)\)/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[2],
+        metadata: {
+          action: match[3].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[4]),
+          symbol: match[5],
+          ticket: match[6],
+          priceRequested: match[3].toUpperCase() === 'BUY' ? parseFloat(match[8]) : parseFloat(match[7]),
+        },
+      }),
+    },
+    // Direct submission (from broker desk perspective): [Trade] '1001': for '259713' buy 0.01 XAUUSD.r at 4257.04 (4256.97 / 4257.06)
+    {
+      type: 'ORDER_SUBMITTED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+.*'(\d+)':\s+for\s+'(\d+)'\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)\s+\(([\d\.]+)\s*\/\s*([\d\.]+)\)/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[3],
+        metadata: {
+          action: match[4].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[5]),
+          symbol: match[6],
+          priceRequested: parseFloat(match[7]),
+        },
+      }),
+    },
+    // Close order submitted (from broker desk perspective): [Trade] '1001': for '259713' sell 0.01 XAUUSD.r at 4257.11, close #6913312 buy 0.01 XAUUSD.r 4257.06 (4257.11 / 4257.20)
+    {
+      type: 'ORDER_SUBMITTED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+.*'(\d+)':\s+for\s+'(\d+)'\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+),\s+close\s+#(\d+)\s+(?:buy|sell)\s+[\d\.]+\s+[\w\.-]+\s+[\d\.]+\s+\(([\d\.]+)\s*\/\s*([\d\.]+)\)/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[3],
+        metadata: {
+          action: match[4].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[5]),
+          symbol: match[6],
+          priceRequested: parseFloat(match[7]),
+          ticket: match[8],
+        },
+      }),
+    },
+    // Dealer confirm/execution: [Trade] '1085': confirm sell 0.01 XAUUSD.r at 4261.44 for '259713' (for '259713' sell 0.01 XAUUSD.r at 4261.52, close #6913228)(4261.52 / 4261.61)
+    {
+      type: 'ORDER_EXECUTED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+.*'(\d+)':\s+confirm\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)\s+for\s+'(\d+)'\s+\(for\s+'\d+'\s+(?:buy|sell)\s+[\d\.]+\s+[\w\.-]+\s+at\s+([\d\.]+)(?:,\s+close\s+#(\d+))?\)/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[7],
+        metadata: {
+          action: match[3].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[4]),
+          symbol: match[5],
+          priceExecuted: parseFloat(match[6]),
+          priceRequested: parseFloat(match[8]),
+          ticket: match[9] || undefined,
+        },
+      }),
+    },
     // Real order placed: [Trade] '1001': order placed for execution for '910102' [#670 buy 0.01 XAUUSD.s at 4349.26]
     {
       type: 'ORDER_SUBMITTED' as const,

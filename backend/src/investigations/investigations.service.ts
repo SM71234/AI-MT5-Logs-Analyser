@@ -2,7 +2,8 @@ import { Injectable, NotFoundException, BadRequestException, Logger } from '@nes
 import { PrismaService } from '../prisma/prisma.service';
 import { Mt5Service } from '../mt5/mt5.service';
 import { JournalEngineService } from '../journal/journal-engine.service';
-import { MetricsService } from '../metrics/metrics.service';
+import { MetricsService, CalculatedMetrics } from '../metrics/metrics.service';
+import { NormalizedEvent } from '../journal/normalization.engine';
 import { AiService } from '../ai/ai.service';
 import { CreateInvestigationDto } from './dto/create-investigation.dto';
 import { CreateNoteDto } from './dto/create-note.dto';
@@ -109,35 +110,44 @@ export class InvestigationsService {
        ? this.metricsService.calculate(exitIncident, digits, point)
        : null;
 
-     // Calculate overall trade summaries
-     const entryAdverse = entryMetrics.slippageType === 'Adverse' ? (entryMetrics.slippagePoints ?? 0) : 0;
-     const exitAdverse = (exitMetrics && exitMetrics.slippageType === 'Adverse') ? (exitMetrics.slippagePoints ?? 0) : 0;
-     const netAdversePriceImpact = entryAdverse + exitAdverse;
+      // Combine events from both entry and exit executions for a complete timeline display
+      const combinedEvents = [...entryIncident.events];
+      if (exitIncident) {
+        for (const ev of exitIncident.events) {
+          if (!combinedEvents.some((e) => e.timestamp === ev.timestamp && e.eventType === ev.eventType)) {
+            combinedEvents.push(ev);
+          }
+        }
+      }
+      combinedEvents.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
-     const cumulativeLatencyMs = entryMetrics.executionLatencyMs + (exitMetrics ? exitMetrics.executionLatencyMs : 0);
+      // Calculate overall trade summaries using the shared execution analysis engine
+      const executionAnalysis = this.metricsService.analyzeExecution(entryMetrics, exitMetrics);
 
-     const structuredMetrics = {
-       entry: entryMetrics,
-       exit: exitMetrics,
-       summary: {
-         netAdversePriceImpact,
-         cumulativeLatencyMs,
-       },
-     };
+      const structuredMetrics = {
+        entry: entryMetrics,
+        exit: exitMetrics,
+        summary: {
+          netAdversePriceImpact: executionAnalysis.netSlippage.slippageType === 'Adverse' 
+            ? executionAnalysis.netSlippage.slippagePoints 
+            : 0,
+          cumulativeLatencyMs: executionAnalysis.cumulativeLatency,
+          averageLatencyMs: executionAnalysis.averageLatency,
+          ...executionAnalysis,
+        },
+        canonicalResult: this.buildCanonicalResult(
+          dto.login,
+          dto.ticket,
+          entryIncident,
+          entryMetrics,
+          exitIncident,
+          exitMetrics,
+          combinedEvents
+        ),
+      };
  
      // 4. Save to database
      const title = `Trade Incident — ${entryIncident.symbol} ${entryIncident.action} ${entryIncident.volume} Lot`;
-     
-     // Combine events from both entry and exit executions for a complete timeline display
-     const combinedEvents = [...entryIncident.events];
-     if (exitIncident) {
-       for (const ev of exitIncident.events) {
-         if (!combinedEvents.some((e) => e.timestamp === ev.timestamp && e.eventType === ev.eventType)) {
-           combinedEvents.push(ev);
-         }
-       }
-     }
-     combinedEvents.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
 
      const existing = await this.prisma.investigation.findFirst({
        where: { ticketId: dto.ticket, brokerId: dto.brokerId },
@@ -226,7 +236,9 @@ export class InvestigationsService {
                         parsedMetrics.entry.priceRequested === undefined || 
                         parsedMetrics.entry.priceExecuted === undefined;
                         
-    if (isOldFormat) {
+    const needsCanonicalResult = !parsedMetrics.canonicalResult;
+
+    if (isOldFormat || needsCanonicalResult) {
       try {
         this.logger.log(`Performing dynamic metrics recalculation for historical case ID ${id}`);
         const rawLines = parsedEvents.map((e: any) => e.rawMessage);
@@ -237,21 +249,31 @@ export class InvestigationsService {
         const exitInc = correlated.find(c => c.action === (caseFile.title.includes('BUY') ? 'SELL' : 'BUY'));
         
         if (entryInc) {
-          const entryM = this.metricsService.calculate(entryInc, parsedMetrics.digits, parsedMetrics.pointSize);
-          const exitM = exitInc ? this.metricsService.calculate(exitInc, parsedMetrics.digits, parsedMetrics.pointSize) : null;
+          const entryM = this.metricsService.calculate(entryInc, parsedMetrics.digits || parsedMetrics.entry?.digits, parsedMetrics.pointSize || parsedMetrics.entry?.pointSize);
+          const exitM = exitInc ? this.metricsService.calculate(exitInc, parsedMetrics.digits || parsedMetrics.entry?.digits, parsedMetrics.pointSize || parsedMetrics.entry?.pointSize) : null;
           
-          const entryAdverse = entryM.slippageType === 'Adverse' ? (entryM.slippagePoints ?? 0) : 0;
-          const exitAdverse = (exitM && exitM.slippageType === 'Adverse') ? (exitM.slippagePoints ?? 0) : 0;
-          const netAdversePriceImpact = entryAdverse + exitAdverse;
-          const cumulativeLatencyMs = entryM.executionLatencyMs + (exitM ? exitM.executionLatencyMs : 0);
+          const executionAnalysis = this.metricsService.analyzeExecution(entryM, exitM);
           
           parsedMetrics = {
             entry: entryM,
             exit: exitM,
             summary: {
-              netAdversePriceImpact,
-              cumulativeLatencyMs
-            }
+              netAdversePriceImpact: executionAnalysis.netSlippage.slippageType === 'Adverse'
+                ? executionAnalysis.netSlippage.slippagePoints
+                : 0,
+              cumulativeLatencyMs: executionAnalysis.cumulativeLatency,
+              averageLatencyMs: executionAnalysis.averageLatency,
+              ...executionAnalysis,
+            },
+            canonicalResult: this.buildCanonicalResult(
+              caseFile.clientLogin,
+              caseFile.ticketId,
+              entryInc,
+              entryM,
+              exitInc || null,
+              exitM,
+              parsedEvents
+            )
           };
           
           // Persist the corrected metrics in the database
@@ -377,8 +399,15 @@ export class InvestigationsService {
       content: msg.content,
     }));
 
+    let canonicalResult = null;
+    try {
+      const parsedMetrics = JSON.parse(caseFile.metrics);
+      canonicalResult = parsedMetrics.canonicalResult || null;
+    } catch (e) {}
+
     const response = await this.aiService.followUpChat(
       latestReport.response,
+      canonicalResult,
       history,
       dto.message,
     );
@@ -391,6 +420,174 @@ export class InvestigationsService {
     );
 
     return response;
+  }
+
+  private buildCanonicalResult(
+    clientLogin: string,
+    ticketId: string,
+    entryIncident: any,
+    entryMetrics: CalculatedMetrics,
+    exitIncident: any | null,
+    exitMetrics: CalculatedMetrics | null,
+    combinedEvents: NormalizedEvent[]
+  ): any {
+    const isRejected = entryMetrics.rejection?.isRejected || false;
+    const executed = entryMetrics.executed;
+    const status = entryMetrics.status;
+    
+    const openSubmittedEvent = entryIncident.events.find((e: any) => e.eventType === 'ORDER_SUBMITTED');
+    const openExecutedEvent = entryIncident.events.find((e: any) => e.eventType === 'ORDER_EXECUTED');
+    const orderId = openSubmittedEvent?.metadata?.orderId || openSubmittedEvent?.metadata?.ticket || null;
+    const dealId = openExecutedEvent?.metadata?.dealId || null;
+    
+    // Construct the timeline with explanations and tech details
+    const timeline = combinedEvents.map((ev, index) => {
+      let explanation = '';
+      let technicalDetails = '';
+      const relatedIds: string[] = [];
+      const orderId = ev.metadata.orderId || ev.metadata.ticket || '';
+      const dealId = ev.metadata.dealId || '';
+      if (orderId) relatedIds.push(`Order #${orderId}`);
+      if (dealId) relatedIds.push(`Deal #${dealId}`);
+
+      switch (ev.eventType) {
+        case 'ORDER_SUBMITTED':
+          explanation = `Client submitted a ${ev.metadata.action || 'trade'} request for ${ev.metadata.volume || '0'} Lot ${ev.metadata.symbol || ''} at price ${ev.metadata.priceRequested || 'market'}.`;
+          technicalDetails = `Order submission event for Client #${ev.login}.`;
+          break;
+        case 'ORDER_ROUTED':
+          explanation = `The order request was routed to dealer desk.`;
+          technicalDetails = `Request transferred to dealers, rule '${ev.metadata.rule || 'Centroid Bridge'}'.`;
+          break;
+        case 'DEALER_ACCEPTED':
+          explanation = `Dealer accepted the order request.`;
+          technicalDetails = `Dealer #${ev.metadata.dealerId || 'Desk'} accepted request.`;
+          break;
+        case 'DEALER_REQUOTED':
+          explanation = `Dealer issued a requote to the client.`;
+          technicalDetails = `Requote issued: count ${ev.metadata.requoteCount || 1}.`;
+          break;
+        case 'ORDER_EXECUTED':
+          explanation = `The trade request was successfully executed.`;
+          technicalDetails = `Deal performed ${ev.metadata.dealId ? `[#${ev.metadata.dealId}]` : ''} at price ${ev.metadata.priceExecuted}.`;
+          break;
+        case 'ORDER_REJECTED':
+          explanation = `The MT5 server rejected the order request.`;
+          technicalDetails = `Order #${ev.metadata.orderId || ticketId} rejected: "${ev.metadata.rawReason || 'N/A'}".`;
+          break;
+        case 'DEALER_REJECTED':
+          explanation = `Manual dealer rejected the order request.`;
+          technicalDetails = `Dealer #${ev.metadata.dealerId || 'Desk'} rejected: "${ev.metadata.rawReason || 'N/A'}".`;
+          break;
+        default:
+          explanation = ev.rawMessage;
+          technicalDetails = `Raw log message.`;
+          break;
+      }
+
+      return {
+        timestamp: ev.timestamp,
+        eventType: ev.eventType,
+        explanation,
+        technicalDetails,
+        relatedIds,
+        evidenceId: `log_${index}`,
+      };
+    });
+
+    // Construct evidence tracing support list
+    const evidence = combinedEvents.map((ev, index) => {
+      let claim = '';
+      let type: 'FACT' | 'CALCULATION' | 'INFERENCE' | 'UNKNOWN' = 'FACT';
+
+      switch (ev.eventType) {
+        case 'ORDER_SUBMITTED':
+          claim = `Client submitted trade request for ${ev.metadata.symbol}`;
+          type = 'FACT';
+          break;
+        case 'ORDER_EXECUTED':
+          claim = `Trade request executed at price ${ev.metadata.priceExecuted}`;
+          type = 'FACT';
+          break;
+        case 'ORDER_REJECTED':
+        case 'DEALER_REJECTED':
+          claim = `Trade request was explicitly rejected by ${entryMetrics.rejection?.rejectedBy || 'system'}`;
+          type = 'FACT';
+          break;
+        default:
+          claim = `Log state change: ${ev.eventType}`;
+          type = 'FACT';
+          break;
+      }
+
+      return {
+        id: `log_${index}`,
+        timestamp: ev.timestamp,
+        claim,
+        type,
+        rawLog: ev.rawMessage,
+      };
+    });
+
+    // Deterministic confidence calculation
+    let confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN' = 'UNKNOWN';
+    if (executed && entryMetrics.executionLatencyMs !== null) {
+      confidence = 'HIGH';
+    } else if (isRejected && entryMetrics.rejection?.rawReason) {
+      confidence = 'HIGH';
+    } else if (combinedEvents.length > 1) {
+      confidence = 'MEDIUM';
+    } else if (combinedEvents.length === 1) {
+      confidence = 'LOW';
+    }
+
+    // Determine limitations
+    const limitations: string[] = [];
+    if (isRejected && !entryMetrics.rejection?.rawReason) {
+      limitations.push('The available logs do not specify the underlying server rejection reason.');
+    }
+    if (status === 'INCOMPLETE') {
+      limitations.push('Log sequence ends abruptly with no explicit execution or rejection event.');
+    }
+
+    const executionAnalysis = this.metricsService.analyzeExecution(entryMetrics, exitMetrics);
+
+    return {
+      trade: {
+        clientLogin,
+        symbol: entryIncident.symbol,
+        side: entryIncident.action,
+        volume: entryIncident.volume,
+        orderId: orderId,
+        dealId: dealId,
+        positionId: ticketId,
+        requestedPrice: entryMetrics.priceRequested ?? null,
+        timestamp: entryIncident.events[0]?.timestamp || new Date().toISOString(),
+      },
+      status,
+      execution: {
+        executed,
+        executionPrice: entryMetrics.priceExecuted ?? null,
+        slippagePips: entryMetrics.slippagePips,
+        slippagePoints: entryMetrics.slippagePoints,
+        slippageType: entryMetrics.slippageType,
+        executionLatencyMs: entryMetrics.executionLatencyMs,
+      },
+      rejection: {
+        isRejected,
+        reason: entryMetrics.rejection?.reason ?? null,
+        rawReason: entryMetrics.rejection?.rawReason ?? null,
+        rejectedBy: entryMetrics.rejection?.rejectedBy ?? null,
+        failedStage: entryMetrics.rejection?.failedStage ?? null,
+        lastSuccessfulStage: entryMetrics.rejection?.lastSuccessfulStage ?? null,
+        rejectionLatencyMs: entryMetrics.rejectionLatencyMs,
+      },
+      executionAnalysis,
+      timeline,
+      evidence,
+      confidence,
+      limitations,
+    };
   }
 
   private async logAction(userId: string, action: string, details: string, ipAddress?: string) {

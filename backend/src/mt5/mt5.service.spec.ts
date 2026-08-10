@@ -2,6 +2,7 @@ import { Test, TestingModule } from '@nestjs/testing';
 import { Mt5Service } from './mt5.service';
 import { ConfigService } from '@nestjs/config';
 import { BrokersService } from '../brokers/brokers.service';
+import { MetricsService } from '../metrics/metrics.service';
 import { NotFoundException, BadGatewayException } from '@nestjs/common';
 
 describe('Mt5Service', () => {
@@ -17,11 +18,26 @@ describe('Mt5Service', () => {
       findOneWithCredentials: jest.fn(),
     };
 
+    const mockMetricsService = {
+      analyzeExecution: jest.fn().mockImplementation((entry, exit) => ({
+        entryExecution: entry,
+        exitExecution: exit,
+        netSlippage: { slippagePoints: 0, slippageType: 'Zero' },
+        grossAdverseSlippage: 0,
+        grossFavorableSlippage: 0,
+        entryLatency: null,
+        exitLatency: null,
+        cumulativeLatency: 0,
+        averageLatency: null,
+      })),
+    };
+
     const module: TestingModule = await Test.createTestingModule({
       providers: [
         Mt5Service,
         { provide: ConfigService, useValue: mockConfigService },
         { provide: BrokersService, useValue: mockBrokersService },
+        { provide: MetricsService, useValue: mockMetricsService },
       ],
     }).compile();
 

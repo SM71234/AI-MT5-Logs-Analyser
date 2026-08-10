@@ -54,6 +54,7 @@ export default function InvestigationWorkspacePage() {
   const [noteContent, setNoteContent] = useState('');
   const [chatInput, setChatInput] = useState('');
   const [chatMessages, setChatMessages] = useState<{ role: 'user' | 'assistant'; content: string }[]>([]);
+  const [selectedEvidence, setSelectedEvidence] = useState<{ claim: string; rawLog: string; timestamp: string } | null>(null);
 
   // Fetch detailed investigation case details
   const { data: caseFile, isLoading, error } = useQuery<InvestigationCase>({
@@ -212,6 +213,54 @@ export default function InvestigationWorkspacePage() {
         </div>
       </header>
 
+      {/* Investigation Conclusion Banner */}
+      {metrics?.canonicalResult && (
+        <div className={`mx-6 mt-4 p-4 rounded-xl border flex items-start gap-4 ${
+          metrics.canonicalResult.status === 'EXECUTED'
+            ? 'border-emerald-950/60 bg-emerald-950/15 text-emerald-400'
+            : metrics.canonicalResult.status === 'REJECTED'
+            ? 'border-red-950/60 bg-red-950/15 text-red-400'
+            : 'border-zinc-800 bg-zinc-900/40 text-zinc-400'
+        }`}>
+          <div className="flex-1">
+            <div className="flex items-center gap-2">
+              <span className={`text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded ${
+                metrics.canonicalResult.status === 'EXECUTED'
+                  ? 'bg-emerald-500/10 border border-emerald-500/20 text-emerald-400'
+                  : metrics.canonicalResult.status === 'REJECTED'
+                  ? 'bg-red-500/10 border border-red-500/20 text-red-400'
+                  : 'bg-zinc-800 border border-zinc-700 text-zinc-400'
+              }`}>
+                {metrics.canonicalResult.status}
+              </span>
+              <h4 className="text-xs font-semibold text-zinc-200">Investigation Conclusion</h4>
+            </div>
+            <p className="text-xs mt-1.5 text-zinc-450 leading-relaxed">
+              {metrics.canonicalResult.status === 'EXECUTED' && (
+                <>
+                  The trade request for <strong>{metrics.canonicalResult.trade.volume} Lot {metrics.canonicalResult.trade.symbol}</strong> was successfully executed at price <strong>{metrics.canonicalResult.execution.executionPrice}</strong>. Execution latency was <strong>{metrics.canonicalResult.execution.executionLatencyMs} ms</strong> with <strong>{metrics.canonicalResult.execution.slippagePips !== null ? `${metrics.canonicalResult.execution.slippagePips} pips` : 'no'}</strong> slippage.
+                </>
+              )}
+              {metrics.canonicalResult.status === 'REJECTED' && (
+                <>
+                  The trade request was explicitly rejected during the <strong>{metrics.canonicalResult.rejection.failedStage}</strong> stage by <strong>{metrics.canonicalResult.rejection.rejectedBy}</strong> due to: <strong>"{metrics.canonicalResult.rejection.reason}"</strong>. Rejection latency was <strong>{metrics.canonicalResult.rejection.rejectionLatencyMs} ms</strong>.
+                </>
+              )}
+              {metrics.canonicalResult.status === 'INCOMPLETE' && (
+                <>
+                  The trade request submission was started, but the logs terminate abruptly without any execution or explicit rejection events.
+                </>
+              )}
+              {metrics.canonicalResult.status === 'UNKNOWN' && (
+                <>
+                  The trade dispute timeline could not be resolved from the available journal records.
+                </>
+              )}
+            </p>
+          </div>
+        </div>
+      )}
+
       {/* Tabs navigation */}
       <div className="border-b border-zinc-900 bg-zinc-950/20 px-6 shrink-0 flex">
         <button
@@ -266,49 +315,132 @@ export default function InvestigationWorkspacePage() {
             
             {/* Visual Node Tree */}
             <div className="relative pl-6 space-y-6 border-l border-zinc-900">
-              {(caseFile.events || []).map((event, idx) => {
-                const isExecuted = event.eventType === 'ORDER_EXECUTED';
-                const isRequoted = event.eventType === 'DEALER_REQUOTED';
+              {metrics?.canonicalResult ? (
+                (metrics.canonicalResult.timeline || []).map((item: any, idx: number) => {
+                  const isExecuted = item.eventType === 'ORDER_EXECUTED';
+                  const isRequoted = item.eventType === 'DEALER_REQUOTED';
+                  const isRejected = item.eventType === 'ORDER_REJECTED' || item.eventType === 'DEALER_REJECTED';
+                  
+                  // Find corresponding evidence raw log
+                  const evidenceItem = metrics.canonicalResult.evidence?.find((e: any) => e.id === item.evidenceId);
 
-                return (
-                  <div key={idx} className="relative group">
-                    {/* Visual node status dot */}
-                    <div className={`absolute -left-[30px] top-0 flex h-4 w-4 items-center justify-center rounded-full border bg-zinc-950 ${
-                      isExecuted
-                        ? 'border-emerald-500 text-emerald-400'
-                        : isRequoted
-                        ? 'border-amber-500 text-amber-400'
-                        : 'border-zinc-800 text-zinc-500'
-                    }`}>
-                      {isExecuted ? (
-                        <CheckCircle className="h-2.5 w-2.5 fill-current" />
-                      ) : isRequoted ? (
-                        <AlertTriangle className="h-2.5 w-2.5 fill-current" />
-                      ) : (
-                        <span className="h-1 w-1 rounded-full bg-zinc-500" />
-                      )}
-                    </div>
-
-                    <div className="space-y-1">
-                      <div className="flex items-center gap-3">
-                        <span className="text-[10px] font-mono text-zinc-500">
-                          {new Date(event.timestamp).toISOString()}
-                        </span>
-                        <span className={`inline-block rounded px-1.5 py-0.2 text-[8px] font-semibold border ${
-                          isExecuted
-                            ? 'bg-emerald-950/20 border-emerald-900/60 text-emerald-400'
-                            : isRequoted
-                            ? 'bg-amber-950/20 border-amber-900/60 text-amber-400'
-                            : 'bg-zinc-900/40 border-zinc-850 text-zinc-500'
-                        }`}>
-                          {event.eventType}
-                        </span>
+                  return (
+                    <div key={idx} className="relative group">
+                      {/* Visual node status dot */}
+                      <div className={`absolute -left-[30px] top-0.5 flex h-4 w-4 items-center justify-center rounded-full border bg-zinc-950 ${
+                        isExecuted
+                          ? 'border-emerald-500 text-emerald-400'
+                          : isRejected
+                          ? 'border-red-500 text-red-400'
+                          : isRequoted
+                          ? 'border-amber-500 text-amber-400'
+                          : 'border-zinc-800 text-zinc-500'
+                      }`}>
+                        {isExecuted ? (
+                          <CheckCircle className="h-2.5 w-2.5 fill-current" />
+                        ) : isRejected ? (
+                          <AlertTriangle className="h-2.5 w-2.5 fill-current text-red-400" />
+                        ) : (
+                          <span className="h-1.5 w-1.5 rounded-full bg-zinc-500" />
+                        )}
                       </div>
-                      <p className="text-xs text-zinc-300 font-medium pl-0.5">{event.rawMessage}</p>
+
+                      <div className="space-y-1.5">
+                        <div className="flex items-center gap-3">
+                          <span className="text-[10px] font-mono text-zinc-500">
+                            {new Date(item.timestamp).toISOString()}
+                          </span>
+                          <span className={`inline-block rounded px-1.5 py-0.2 text-[8px] font-semibold border ${
+                            isExecuted
+                              ? 'bg-emerald-950/20 border-emerald-900/60 text-emerald-400'
+                              : isRejected
+                              ? 'bg-red-950/20 border-red-900/60 text-red-400'
+                              : isRequoted
+                              ? 'bg-amber-950/20 border-amber-900/60 text-amber-400'
+                              : 'bg-zinc-900/40 border-zinc-850 text-zinc-500'
+                          }`}>
+                            {item.eventType}
+                          </span>
+                        </div>
+                        
+                        <div className="pl-0.5">
+                          <p className="text-xs text-zinc-200 font-medium">{item.explanation}</p>
+                          <p className="text-[10px] text-zinc-500 mt-0.5 italic font-mono">{item.technicalDetails}</p>
+                          
+                          {item.relatedIds && item.relatedIds.length > 0 && (
+                            <div className="flex items-center gap-2 mt-1.5">
+                              <span className="text-[9px] text-zinc-650 font-semibold uppercase">Related:</span>
+                              {item.relatedIds.map((rid: string, i: number) => (
+                                <span key={i} className="inline-block bg-zinc-900/60 border border-zinc-850 text-zinc-450 font-mono text-[9px] px-1.5 py-0.1 rounded">
+                                  {rid}
+                                </span>
+                              ))}
+                            </div>
+                          )}
+
+                          {evidenceItem && (
+                            <button
+                              onClick={() => setSelectedEvidence({
+                                claim: evidenceItem.claim,
+                                rawLog: evidenceItem.rawLog,
+                                timestamp: evidenceItem.timestamp
+                              })}
+                              className="mt-2 text-[9px] font-semibold text-zinc-400 hover:text-zinc-200 flex items-center gap-1 border border-zinc-900 bg-zinc-900/20 hover:bg-zinc-900/60 px-2 py-0.5 rounded transition"
+                            >
+                              <Database className="h-2.5 w-2.5" />
+                              View Evidence
+                            </button>
+                          )}
+                        </div>
+                      </div>
                     </div>
-                  </div>
-                );
-              })}
+                  );
+                })
+              ) : (
+                (caseFile.events || []).map((event, idx) => {
+                  const isExecuted = event.eventType === 'ORDER_EXECUTED';
+                  const isRequoted = event.eventType === 'DEALER_REQUOTED';
+
+                  return (
+                    <div key={idx} className="relative group">
+                      {/* Visual node status dot */}
+                      <div className={`absolute -left-[30px] top-0 flex h-4 w-4 items-center justify-center rounded-full border bg-zinc-950 ${
+                        isExecuted
+                          ? 'border-emerald-500 text-emerald-400'
+                          : isRequoted
+                          ? 'border-amber-500 text-amber-400'
+                          : 'border-zinc-800 text-zinc-500'
+                      }`}>
+                        {isExecuted ? (
+                          <CheckCircle className="h-2.5 w-2.5 fill-current" />
+                        ) : isRequoted ? (
+                          <AlertTriangle className="h-2.5 w-2.5 fill-current" />
+                        ) : (
+                          <span className="h-1 w-1 rounded-full bg-zinc-500" />
+                        )}
+                      </div>
+
+                      <div className="space-y-1">
+                        <div className="flex items-center gap-3">
+                          <span className="text-[10px] font-mono text-zinc-500">
+                            {new Date(event.timestamp).toISOString()}
+                          </span>
+                          <span className={`inline-block rounded px-1.5 py-0.2 text-[8px] font-semibold border ${
+                            isExecuted
+                              ? 'bg-emerald-950/20 border-emerald-900/60 text-emerald-400'
+                              : isRequoted
+                              ? 'bg-amber-950/20 border-amber-900/60 text-amber-400'
+                              : 'bg-zinc-900/40 border-zinc-850 text-zinc-500'
+                          }`}>
+                            {event.eventType}
+                          </span>
+                        </div>
+                        <p className="text-xs text-zinc-300 font-medium pl-0.5">{event.rawMessage}</p>
+                      </div>
+                    </div>
+                  );
+                })
+              )}
             </div>
           </div>
         )}
@@ -360,14 +492,14 @@ export default function InvestigationWorkspacePage() {
                     <div>
                       <span className="text-[10px] text-zinc-500 block">Requested Price</span>
                       <span className="text-zinc-300 font-semibold mt-1 block">
-                        {entry.priceRequested !== undefined ? entry.priceRequested.toFixed(5) : 'N/A'}
+                        {entry.priceRequested !== undefined && entry.priceRequested !== null ? entry.priceRequested.toFixed(5) : 'N/A'}
                       </span>
                     </div>
 
                     <div>
                       <span className="text-[10px] text-zinc-500 block">Executed Price</span>
                       <span className="text-zinc-100 font-semibold mt-1 block">
-                        {entry.priceExecuted !== undefined ? entry.priceExecuted.toFixed(5) : 'N/A'}
+                        {entry.priceExecuted !== undefined && entry.priceExecuted !== null ? entry.priceExecuted.toFixed(5) : 'N/A (Rejected)'}
                       </span>
                     </div>
 
@@ -376,7 +508,7 @@ export default function InvestigationWorkspacePage() {
                       <span className={`font-semibold mt-1 block ${
                         entry.priceDelta > 0 ? 'text-amber-400' : entry.priceDelta < 0 ? 'text-emerald-400' : 'text-zinc-500'
                       }`}>
-                        {entry.priceDelta > 0 ? `+${entry.priceDelta.toFixed(5)}` : entry.priceDelta?.toFixed(5) || '0.00000'}
+                        {entry.priceExecuted !== null ? (entry.priceDelta > 0 ? `+${entry.priceDelta.toFixed(5)}` : entry.priceDelta?.toFixed(5)) : 'N/A'}
                       </span>
                     </div>
 
@@ -400,7 +532,7 @@ export default function InvestigationWorkspacePage() {
                           {entry.slippagePoints} points
                         </span>
                       ) : (
-                        <span className="text-zinc-500 mt-1 block italic text-[10px]">N/A (Specs missing)</span>
+                        <span className="text-zinc-500 mt-1 block italic text-[10px]">N/A</span>
                       )}
                     </div>
 
@@ -413,16 +545,25 @@ export default function InvestigationWorkspacePage() {
                           ? 'text-emerald-400' 
                           : 'text-zinc-500'
                       }`}>
-                        {entry.slippageType || 'Zero'}
+                        {entry.slippageType || 'N/A'}
                       </span>
                     </div>
 
                     <div>
                       <span className="text-[10px] text-zinc-500 block">Execution Latency</span>
                       <span className="text-zinc-300 font-semibold mt-1 block">
-                        {entry.executionLatencyMs} ms
+                        {entry.executionLatencyMs !== null && entry.executionLatencyMs !== undefined ? `${entry.executionLatencyMs} ms` : 'N/A'}
                       </span>
                     </div>
+
+                    {entry.rejectionLatencyMs !== null && entry.rejectionLatencyMs !== undefined && (
+                      <div>
+                        <span className="text-[10px] text-red-400 block font-semibold">Rejection Latency</span>
+                        <span className="text-red-400 font-bold mt-1 block">
+                          {entry.rejectionLatencyMs} ms
+                        </span>
+                      </div>
+                    )}
                   </div>
                 </div>
 
@@ -449,14 +590,14 @@ export default function InvestigationWorkspacePage() {
                       <div>
                         <span className="text-[10px] text-zinc-500 block">Requested Price</span>
                         <span className="text-zinc-300 font-semibold mt-1 block">
-                          {exit.priceRequested !== undefined ? exit.priceRequested.toFixed(5) : 'N/A'}
+                          {exit.priceRequested !== undefined && exit.priceRequested !== null ? exit.priceRequested.toFixed(5) : 'N/A'}
                         </span>
                       </div>
 
                       <div>
                         <span className="text-[10px] text-zinc-500 block">Executed Price</span>
                         <span className="text-zinc-100 font-semibold mt-1 block">
-                          {exit.priceExecuted !== undefined ? exit.priceExecuted.toFixed(5) : 'N/A'}
+                          {exit.priceExecuted !== undefined && exit.priceExecuted !== null ? exit.priceExecuted.toFixed(5) : 'N/A'}
                         </span>
                       </div>
 
@@ -465,7 +606,7 @@ export default function InvestigationWorkspacePage() {
                         <span className={`font-semibold mt-1 block ${
                           exit.priceDelta > 0 ? 'text-amber-400' : exit.priceDelta < 0 ? 'text-emerald-400' : 'text-zinc-500'
                         }`}>
-                          {exit.priceDelta > 0 ? `+${exit.priceDelta.toFixed(5)}` : exit.priceDelta?.toFixed(5) || '0.00000'}
+                          {exit.priceExecuted !== null ? (exit.priceDelta > 0 ? `+${exit.priceDelta.toFixed(5)}` : exit.priceDelta?.toFixed(5)) : 'N/A'}
                         </span>
                       </div>
 
@@ -489,7 +630,7 @@ export default function InvestigationWorkspacePage() {
                             {exit.slippagePoints} points
                           </span>
                         ) : (
-                          <span className="text-zinc-500 mt-1 block italic text-[10px]">N/A (Specs missing)</span>
+                          <span className="text-zinc-500 mt-1 block italic text-[10px]">N/A</span>
                         )}
                       </div>
 
@@ -502,14 +643,14 @@ export default function InvestigationWorkspacePage() {
                             ? 'text-emerald-400' 
                             : 'text-zinc-500'
                         }`}>
-                          {exit.slippageType || 'Zero'}
+                          {exit.slippageType || 'N/A'}
                         </span>
                       </div>
 
                       <div>
                         <span className="text-[10px] text-zinc-500 block">Execution Latency</span>
                         <span className="text-zinc-300 font-semibold mt-1 block">
-                          {exit.executionLatencyMs} ms
+                          {exit.executionLatencyMs !== null && exit.executionLatencyMs !== undefined ? `${exit.executionLatencyMs} ms` : 'N/A'}
                         </span>
                       </div>
                     </div>
@@ -573,29 +714,48 @@ export default function InvestigationWorkspacePage() {
 
                   <div className="grid gap-6 sm:grid-cols-3">
                     <div className="bg-zinc-950/20 border border-zinc-900/50 rounded-lg p-4">
-                      <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Net Adverse Price Impact</span>
-                      <span className="text-xl font-bold text-red-400 mt-1 block font-mono">
-                        {summary.netAdversePriceImpact} points
+                      <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Net Round-Trip Slippage</span>
+                      <span className={`text-xl font-bold mt-1 block font-mono ${
+                        summary.netSlippage?.slippageType === 'Adverse' 
+                          ? 'text-red-400' 
+                          : summary.netSlippage?.slippageType === 'Favorable' 
+                          ? 'text-emerald-400' 
+                          : 'text-zinc-400'
+                      }`}>
+                        {summary.netSlippage?.slippagePoints ?? 0} points {summary.netSlippage?.slippageType || 'Zero'}
                       </span>
-                      <span className="text-[9px] text-zinc-500 block mt-1">
-                        Entry: {entry.slippageType === 'Adverse' ? entry.slippagePoints : 0} pts | Exit: {exit && exit.slippageType === 'Adverse' ? exit.slippagePoints : 0} pts
-                      </span>
+                      <div className="text-[9px] text-zinc-500 space-y-0.5 mt-2 pt-2 border-t border-zinc-900/50">
+                        <div>Entry: {summary.entryExecution?.slippagePoints ?? 0} {summary.entryExecution?.slippageType === 'Adverse' ? 'Adverse' : summary.entryExecution?.slippageType === 'Favorable' ? 'Favorable' : 'Zero'}</div>
+                        {summary.exitExecution && (
+                          <>
+                            <div>Exit: {summary.exitExecution.slippagePoints} {summary.exitExecution.slippageType === 'Adverse' ? 'Adverse' : summary.exitExecution.slippageType === 'Favorable' ? 'Favorable' : 'Zero'}</div>
+                            <div className="text-amber-400/80 font-medium">Brokeree Applied: {summary.exitExecution.slippagePoints} points Adverse</div>
+                          </>
+                        )}
+                      </div>
                     </div>
 
                     <div className="bg-zinc-950/20 border border-zinc-900/50 rounded-lg p-4">
                       <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Cumulative Execution Latency</span>
                       <span className="text-xl font-bold text-zinc-100 mt-1 block font-mono">
-                        {summary.cumulativeLatencyMs} ms
+                        {summary.cumulativeLatency !== undefined && summary.cumulativeLatency !== null 
+                          ? `${summary.cumulativeLatency.toFixed(0)} ms` 
+                          : `${summary.cumulativeLatencyMs || 0} ms`}
                       </span>
-                      <span className="text-[9px] text-zinc-500 block mt-1">
-                        Across Entry + Exit executions
-                      </span>
+                      <div className="text-[9px] text-zinc-500 space-y-0.5 mt-2 pt-2 border-t border-zinc-900/50">
+                        <div>Entry Latency: {summary.entryLatency !== null && summary.entryLatency !== undefined ? `${summary.entryLatency.toFixed(0)} ms` : 'N/A'}</div>
+                        {summary.exitExecution && (
+                          <div>Exit Latency: {summary.exitLatency !== null && summary.exitLatency !== undefined ? `${summary.exitLatency.toFixed(0)} ms` : 'N/A'}</div>
+                        )}
+                      </div>
                     </div>
 
                     <div className="bg-zinc-950/20 border border-zinc-900/50 rounded-lg p-4">
                       <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Average Execution Latency</span>
                       <span className="text-xl font-bold text-zinc-300 mt-1 block font-mono">
-                        {exit ? ((entry.executionLatencyMs + exit.executionLatencyMs) / 2).toFixed(0) : entry.executionLatencyMs} ms
+                        {summary.averageLatency !== undefined && summary.averageLatency !== null 
+                          ? `${summary.averageLatency.toFixed(0)} ms` 
+                          : `${(exit ? ((entry.executionLatencyMs + exit.executionLatencyMs) / 2) : entry.executionLatencyMs).toFixed(0)} ms`}
                       </span>
                       <span className="text-[9px] text-zinc-500 block mt-1">
                         Mean execution processing delay
@@ -797,6 +957,51 @@ export default function InvestigationWorkspacePage() {
         )}
 
       </div>
+      {/* Evidence Viewer Overlay Dialog */}
+      {selectedEvidence && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/60 backdrop-blur-sm p-4 animate-fade-in">
+          <div className="w-full max-w-xl rounded-xl border border-zinc-800 bg-zinc-950 p-6 shadow-2xl space-y-4">
+            <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
+              <div className="flex items-center gap-2">
+                <Database className="h-4.5 w-4.5 text-zinc-400" />
+                <h3 className="text-sm font-semibold text-zinc-200">Raw Log Evidence</h3>
+              </div>
+              <button
+                onClick={() => setSelectedEvidence(null)}
+                className="text-xs text-zinc-500 hover:text-zinc-300 font-medium transition"
+              >
+                Close
+              </button>
+            </div>
+            
+            <div className="space-y-3 text-xs">
+              <div>
+                <span className="text-[10px] text-zinc-500 block uppercase font-mono tracking-wider">Timestamp</span>
+                <span className="text-zinc-350 font-mono mt-0.5 block">{selectedEvidence.timestamp}</span>
+              </div>
+              <div>
+                <span className="text-[10px] text-zinc-500 block uppercase font-mono tracking-wider">Claim</span>
+                <span className="text-zinc-200 font-semibold mt-0.5 block">{selectedEvidence.claim}</span>
+              </div>
+              <div>
+                <span className="text-[10px] text-zinc-500 block uppercase font-mono tracking-wider">Raw MT5 Log Output</span>
+                <pre className="mt-1.5 p-3 rounded-lg border border-zinc-900 bg-zinc-900/40 text-zinc-350 font-mono text-[10px] overflow-x-auto whitespace-pre-wrap break-all select-all leading-normal">
+                  {selectedEvidence.rawLog}
+                </pre>
+              </div>
+            </div>
+            
+            <div className="flex justify-end pt-2">
+              <button
+                onClick={() => setSelectedEvidence(null)}
+                className="rounded-lg bg-zinc-800 border border-zinc-700/60 px-4 py-2 text-xs font-semibold text-zinc-200 hover:bg-zinc-750 transition"
+              >
+                Close
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   );
 }

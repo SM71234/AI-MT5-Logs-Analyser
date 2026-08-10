@@ -831,6 +831,8 @@ def get_user_journal(login: str, request: Request):
                     deals = manager.DealRequestByLogins([int(login)], from_ts, to_ts)
                     orders = manager.HistoryRequestByLogins([int(login)], from_ts, to_ts)
                     
+                    executed_order_ids = set()
+                    
                     if deals:
                         orders_map = {}
                         for order in (orders or []):
@@ -845,6 +847,9 @@ def get_user_journal(login: str, request: Request):
                                 continue
                                 
                             oid = getattr(deal, "Order", 0) or 0
+                            if oid > 0:
+                                executed_order_ids.add(oid)
+                                
                             order = orders_map.get(oid)
                             
                             if order:
@@ -873,6 +878,45 @@ def get_user_journal(login: str, request: Request):
                             journal_lines.append(f"{req_time} [Trade] '1001': order placed for execution for '{login}' [#{oid} {action_str} {volume:.2f} {symbol} at {req_price:.5f}], time 0.52 ms")
                             journal_lines.append(f"{deal_time} [Trade] Centroid Gateway '{login}': deal performed [#{deal_id} {action_str} {volume:.2f} {symbol} at {price:.5f}]")
                             journal_lines.append(f"{deal_time} [Trade] Centroid Gateway '{login}': order performed {action_str} {volume:.2f} at {price:.5f} [#{oid} {action_str} {volume:.2f} {symbol} at {req_price:.5f}], time: 0.05 ms")
+
+                    # Reconstruct log lines for non-executed (rejected/canceled) history orders
+                    if orders:
+                        for order in orders:
+                            oid = getattr(order, "Order", 0) or 0
+                            if oid <= 0 or oid in executed_order_ids:
+                                continue
+                                
+                            symbol = getattr(order, "Symbol", "") or ""
+                            if not symbol:
+                                continue
+                                
+                            setup_msc = getattr(order, "TimeSetupMsc", 0) or (getattr(order, "TimeSetup", 0) * 1000)
+                            done_msc = getattr(order, "TimeDoneMsc", 0) or (getattr(order, "TimeDone", 0) * 1000)
+                            if done_msc <= 0:
+                                done_msc = setup_msc + 100
+                                
+                            req_time = datetime.fromtimestamp(setup_msc / 1000.0, UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                            reject_time = datetime.fromtimestamp(done_msc / 1000.0, UTC).strftime("%Y-%m-%dT%H:%M:%S.%f")[:-3] + "Z"
+                            
+                            action_code = getattr(order, "Type", 0)
+                            action_str = "buy" if action_code in [0, 2, 4] else "sell"
+                            
+                            vol_ext = getattr(order, "VolumeInitialExt", 0)
+                            vol_raw = getattr(order, "VolumeInitial", 0)
+                            volume = _volume_lots(vol_ext, vol_raw)
+                            
+                            req_price = getattr(order, "PriceOrder", 0.0) or 0.0
+                            
+                            state = getattr(order, "State", 0)
+                            reason_code = getattr(order, "Reason", 0)
+                            reason_str = "request rejected"
+                            if state == 5:
+                                reason_str = "request rejected"
+                            elif state == 2:
+                                reason_str = "request canceled by client"
+                                
+                            journal_lines.append(f"{req_time} [Trade] '1001': order placed for execution for '{login}' [#{oid} {action_str} {volume:.2f} {symbol} at {req_price:.5f}], time 0.52 ms")
+                            journal_lines.append(f"{reject_time} [Trade] '{login}': {reason_str}")
             
             return {"success": True, "data": journal_lines}
         except Exception as exc:
