@@ -158,7 +158,7 @@ export default function ClientsPage() {
   const [savingTicketId, setSavingTicketId] = useState<string | null>(null);
 
   // MT5 History Ranges selection
-  const [historyRange, setHistoryRange] = useState<string>(() => sessionStorage.getItem('clients_historyRange') || 'all');
+  const [historyRange, setHistoryRange] = useState<string>(() => sessionStorage.getItem('clients_historyRange') || 'month');
   const [customStartDate, setCustomStartDate] = useState<string>(() => sessionStorage.getItem('clients_customStartDate') || '');
   const [customEndDate, setCustomEndDate] = useState<string>(() => sessionStorage.getItem('clients_customEndDate') || '');
   const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
@@ -228,7 +228,7 @@ export default function ClientsPage() {
   // Query Client Profile details
   const {
     data: clientProfile,
-    isLoading: isLoadingProfile,
+    isFetching: isFetchingProfile,
     error: profileError,
     refetch: refetchProfile,
   } = useQuery<ClientProfile>({
@@ -251,7 +251,7 @@ export default function ClientsPage() {
   // Query Client Trades history with date range filtering
   const {
     data: trades,
-    isLoading: isLoadingTrades,
+    isFetching: isFetchingTrades,
     refetch: refetchTrades,
   } = useQuery<Trade[]>({
     queryKey: ['client-trades', activeQuery, queryRangeParams],
@@ -381,10 +381,10 @@ export default function ClientsPage() {
 
           <button
             type="submit"
-            disabled={isSearchDisabled || isLoadingProfile}
+            disabled={isSearchDisabled || isFetchingProfile || isFetchingTrades}
             className="flex items-center justify-center gap-2 rounded-lg bg-zinc-100 px-4 py-2.5 text-xs font-semibold text-zinc-950 hover:bg-zinc-200 active:bg-zinc-300 transition duration-150 disabled:opacity-50 h-10 shrink-0"
           >
-            {isLoadingProfile ? 'Loading...' : 'Search Client'}
+            {isFetchingProfile || isFetchingTrades ? 'Loading...' : 'Search Client'}
           </button>
         </form>
       </div>
@@ -576,7 +576,7 @@ export default function ClientsPage() {
               </button>
             </div>
 
-            {isLoadingTrades ? (
+            {isFetchingTrades ? (
               <div className="flex justify-center py-12">
                 <div className="h-6 w-6 animate-spin rounded-full border-2 border-zinc-850 border-t-zinc-400" />
               </div>
@@ -714,9 +714,13 @@ export default function ClientsPage() {
                                       : `${(trade.latencyMs ?? trade.durationSeconds * 1000).toFixed(0)} ms`}
                                   </span>
                                 </div>
-                                {trade.executionAnalysis?.exitExecution && (
+                                {trade.executionAnalysis?.exitExecution ? (
                                   <span className="text-[9px] text-zinc-500 font-normal mt-0.5">
-                                    cum: {trade.executionAnalysis.cumulativeLatency.toFixed(0)} ms
+                                    Open: {trade.executionAnalysis.entryLatency !== null ? `${trade.executionAnalysis.entryLatency.toFixed(0)} ms` : 'N/A'} | Close: {trade.executionAnalysis.exitLatency !== null ? `${trade.executionAnalysis.exitLatency.toFixed(0)} ms` : 'N/A'}
+                                  </span>
+                                ) : (
+                                  <span className="text-[9px] text-zinc-500 font-normal mt-0.5">
+                                    Open: {trade.executionAnalysis?.entryLatency !== null && trade.executionAnalysis?.entryLatency !== undefined ? `${trade.executionAnalysis.entryLatency.toFixed(0)} ms` : `${(trade.latencyMs ?? trade.durationSeconds * 1000).toFixed(0)} ms`}
                                   </span>
                                 )}
                               </div>

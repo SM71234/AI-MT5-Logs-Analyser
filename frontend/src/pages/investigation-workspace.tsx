@@ -238,7 +238,17 @@ export default function InvestigationWorkspacePage() {
             <p className="text-xs mt-1.5 text-zinc-450 leading-relaxed">
               {metrics.canonicalResult.status === 'EXECUTED' && (
                 <>
-                  The trade request for <strong>{metrics.canonicalResult.trade.volume} Lot {metrics.canonicalResult.trade.symbol}</strong> was successfully executed at price <strong>{metrics.canonicalResult.execution.executionPrice}</strong>. Execution latency was <strong>{metrics.canonicalResult.execution.executionLatencyMs} ms</strong> with <strong>{metrics.canonicalResult.execution.slippagePips !== null ? `${metrics.canonicalResult.execution.slippagePips} pips` : 'no'}</strong> slippage.
+                  The trade request for <strong>{metrics.canonicalResult.trade.volume} Lot {metrics.canonicalResult.trade.symbol}</strong> was successfully executed at price <strong>{metrics.canonicalResult.execution.executionPrice}</strong>.
+                  {metrics.canonicalResult.executionAnalysis?.exitExecution ? (
+                    <>
+                      {' '}Open execution latency was <strong>{metrics.canonicalResult.executionAnalysis.entryLatency !== null && metrics.canonicalResult.executionAnalysis.entryLatency !== undefined ? `${metrics.canonicalResult.executionAnalysis.entryLatency.toFixed(0)} ms` : `${metrics.canonicalResult.execution.executionLatencyMs} ms`}</strong>, and Close execution latency was <strong>{metrics.canonicalResult.executionAnalysis.exitLatency !== null && metrics.canonicalResult.executionAnalysis.exitLatency !== undefined ? `${metrics.canonicalResult.executionAnalysis.exitLatency.toFixed(0)} ms` : 'N/A'}</strong>
+                    </>
+                  ) : (
+                    <>
+                      {' '}Execution latency was <strong>{metrics.canonicalResult.execution.executionLatencyMs} ms</strong>
+                    </>
+                  )}
+                  {' '}with <strong>{metrics.canonicalResult.executionAnalysis?.netSlippage ? `${metrics.canonicalResult.executionAnalysis.netSlippage.slippagePoints} points ${metrics.canonicalResult.executionAnalysis.netSlippage.slippageType === 'Adverse' ? 'Adverse' : metrics.canonicalResult.executionAnalysis.netSlippage.slippageType === 'Favorable' ? 'Favorable' : 'Zero'}` : (metrics.canonicalResult.execution.slippagePoints !== null ? `${metrics.canonicalResult.execution.slippagePoints} points` : 'no')}</strong> slippage.
                 </>
               )}
               {metrics.canonicalResult.status === 'REJECTED' && (
