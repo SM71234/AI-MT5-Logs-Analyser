@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
-import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
+import { useQuery, useMutation } from '@tanstack/react-query';
 import { useNavigate } from 'react-router-dom';
 import { Search, User, CreditCard, DollarSign, Activity, ArrowRightLeft, ShieldAlert, CheckCircle, Clock, FileSpreadsheet } from 'lucide-react';
 
@@ -56,7 +56,6 @@ interface Trade {
 export default function ClientsPage() {
   const { accessToken } = useAuth();
   const navigate = useNavigate();
-  const queryClient = useQueryClient();
 
   const createInvestigationMutation = useMutation({
     mutationFn: async (vars: { brokerId: string; login: string; ticket: string }) => {
@@ -268,7 +267,7 @@ export default function ClientsPage() {
       if (!res.ok) throw new Error(body.message || 'Failed to load trades');
       return body.data;
     },
-    enabled: !!activeQuery && !!clientProfile,
+    enabled: !!activeQuery,
     retry: false,
     staleTime: Infinity,
     gcTime: 15 * 60 * 1000,
@@ -317,15 +316,14 @@ export default function ClientsPage() {
       login: searchLogin.trim(),
     };
     
-    setActiveQuery(nextQuery);
-    
-    // Explicitly invalidate React Query cache to force a fresh REST API request to the MT5 gateway
-    queryClient.invalidateQueries({ queryKey: ['client-profile', nextQuery] });
-    queryClient.invalidateQueries({ queryKey: ['client-trades', nextQuery] });
-
-    // Force explicit refetches to ensure new fetch happens
-    refetchProfile();
-    refetchTrades();
+    if (activeQuery && activeQuery.brokerId === nextQuery.brokerId && activeQuery.login === nextQuery.login) {
+      // Same login & broker: trigger manual refetch to force fresh data retrieval
+      refetchProfile();
+      refetchTrades();
+    } else {
+      // Different query params: updating state naturally triggers parallel fetching of the new keys
+      setActiveQuery(nextQuery);
+    }
   };
 
   const isSearchDisabled = !selectedBrokerId || !searchLogin.trim();
