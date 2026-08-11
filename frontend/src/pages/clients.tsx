@@ -155,9 +155,62 @@ export default function ClientsPage() {
 
   const [tradeSearch, setTradeSearch] = useState('');
   const [tradeTypeTab, setTradeTypeTab] = useState<'executed' | 'rejected'>('executed');
-  const [currentPage, setCurrentPage] = useState(1);
-  const [pageSize, setPageSize] = useState(10);
   const [savingTicketId, setSavingTicketId] = useState<string | null>(null);
+
+  // MT5 History Ranges selection
+  const [historyRange, setHistoryRange] = useState<string>(() => sessionStorage.getItem('clients_historyRange') || 'all');
+  const [customStartDate, setCustomStartDate] = useState<string>(() => sessionStorage.getItem('clients_customStartDate') || '');
+  const [customEndDate, setCustomEndDate] = useState<string>(() => sessionStorage.getItem('clients_customEndDate') || '');
+  const [sortOrder, setSortOrder] = useState<'desc' | 'asc'>('desc');
+
+  React.useEffect(() => {
+    sessionStorage.setItem('clients_historyRange', historyRange);
+  }, [historyRange]);
+
+  React.useEffect(() => {
+    sessionStorage.setItem('clients_customStartDate', customStartDate);
+  }, [customStartDate]);
+
+  React.useEffect(() => {
+    sessionStorage.setItem('clients_customEndDate', customEndDate);
+  }, [customEndDate]);
+
+  // Compute start/end timestamps from selected range
+  const queryRangeParams = React.useMemo(() => {
+    if (!historyRange) return { from: undefined, to: undefined };
+    const now = new Date();
+    let fromDate: Date | null = null;
+    let toDate: Date | null = new Date(now.getTime() + 86400000); // Tomorrow
+
+    if (historyRange === 'today') {
+      fromDate = new Date(now.getFullYear(), now.getMonth(), now.getDate());
+      toDate = new Date(now.getFullYear(), now.getMonth(), now.getDate(), 23, 59, 59, 999);
+    } else if (historyRange === '3days') {
+      fromDate = new Date(now.getTime() - 3 * 24 * 60 * 60 * 1000);
+    } else if (historyRange === 'week') {
+      fromDate = new Date(now.getTime() - 7 * 24 * 60 * 60 * 1000);
+    } else if (historyRange === 'month') {
+      fromDate = new Date(now.getTime() - 30 * 24 * 60 * 60 * 1000);
+    } else if (historyRange === '3months') {
+      fromDate = new Date(now.getTime() - 90 * 24 * 60 * 60 * 1000);
+    } else if (historyRange === '6months') {
+      fromDate = new Date(now.getTime() - 180 * 24 * 60 * 60 * 1000);
+    } else if (historyRange === 'all') {
+      fromDate = new Date(0);
+    } else if (historyRange === 'custom') {
+      if (customStartDate) {
+        fromDate = new Date(customStartDate);
+      }
+      if (customEndDate) {
+        toDate = new Date(customEndDate);
+      }
+    }
+
+    return {
+      from: fromDate ? Math.floor(fromDate.getTime() / 1000).toString() : undefined,
+      to: toDate ? Math.floor(toDate.getTime() / 1000).toString() : undefined,
+    };
+  }, [historyRange, customStartDate, customEndDate]);
 
   // Fetch brokers list for dropdown selection
   const { data: brokers } = useQuery<Broker[]>({
@@ -177,6 +230,7 @@ export default function ClientsPage() {
     data: clientProfile,
     isLoading: isLoadingProfile,
     error: profileError,
+    refetch: refetchProfile,
   } = useQuery<ClientProfile>({
     queryKey: ['client-profile', activeQuery],
     queryFn: async () => {
@@ -194,15 +248,20 @@ export default function ClientsPage() {
     gcTime: 15 * 60 * 1000,
   });
 
-  // Query Client Trades history
+  // Query Client Trades history with date range filtering
   const {
     data: trades,
     isLoading: isLoadingTrades,
+    refetch: refetchTrades,
   } = useQuery<Trade[]>({
-    queryKey: ['client-trades', activeQuery],
+    queryKey: ['client-trades', activeQuery, queryRangeParams],
     queryFn: async () => {
       if (!activeQuery) return [];
-      const res = await fetch(`/api/v1/trades?brokerId=${activeQuery.brokerId}&login=${activeQuery.login}`, {
+      let url = `/api/v1/trades?brokerId=${activeQuery.brokerId}&login=${activeQuery.login}`;
+      if (queryRangeParams.from) url += `&from=${queryRangeParams.from}`;
+      if (queryRangeParams.to) url += `&to=${queryRangeParams.to}`;
+
+      const res = await fetch(url, {
         headers: { Authorization: `Bearer ${accessToken}` },
       });
       const body = await res.json();
@@ -215,9 +274,8 @@ export default function ClientsPage() {
     gcTime: 15 * 60 * 1000,
   });
 
-  // Reset pagination and tab on query or trades reload
+  // Reset tab on query or trades reload
   React.useEffect(() => {
-    setCurrentPage(1);
     setTradeSearch('');
     setTradeTypeTab('executed');
   }, [trades]);
@@ -232,7 +290,7 @@ export default function ClientsPage() {
     });
 
     // Then, filter by keyword search
-    return tabFiltered.filter((t) => {
+    const textFiltered = tabFiltered.filter((t) => {
       const q = tradeSearch.toLowerCase().trim();
       if (!q) return true;
       return (
@@ -241,15 +299,14 @@ export default function ClientsPage() {
         (t.comment && t.comment.toLowerCase().includes(q))
       );
     });
-  }, [trades, tradeSearch, tradeTypeTab]);
 
-  const paginatedTrades = React.useMemo(() => {
-    const start = (currentPage - 1) * pageSize;
-    const end = start + pageSize;
-    return filteredTrades.slice(start, end);
-  }, [filteredTrades, currentPage, pageSize]);
-
-  const totalPages = Math.ceil(filteredTrades.length / pageSize) || 1;
+    // Finally, sort chronologically based on sortOrder (using timeExecuted / timeRequested)
+    return [...textFiltered].sort((a, b) => {
+      const timeA = new Date(a.timeExecuted || a.timeRequested).getTime();
+      const timeB = new Date(b.timeExecuted || b.timeRequested).getTime();
+      return sortOrder === 'desc' ? timeB - timeA : timeA - timeB;
+    });
+  }, [trades, tradeSearch, tradeTypeTab, sortOrder]);
 
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -265,6 +322,10 @@ export default function ClientsPage() {
     // Explicitly invalidate React Query cache to force a fresh REST API request to the MT5 gateway
     queryClient.invalidateQueries({ queryKey: ['client-profile', nextQuery] });
     queryClient.invalidateQueries({ queryKey: ['client-trades', nextQuery] });
+
+    // Force explicit refetches to ensure new fetch happens
+    refetchProfile();
+    refetchTrades();
   };
 
   const isSearchDisabled = !selectedBrokerId || !searchLogin.trim();
@@ -407,7 +468,26 @@ export default function ClientsPage() {
                   Trade Explorer — Reconstructed Positions
                 </h3>
               </div>
-              <div className="flex items-center gap-3">
+              <div className="flex flex-wrap items-center gap-3">
+                {/* MT5 History Range Selector */}
+                <div className="flex items-center gap-2">
+                  <span className="text-[10px] text-zinc-500 font-semibold uppercase tracking-wider">History:</span>
+                  <select
+                    value={historyRange}
+                    onChange={(e) => setHistoryRange(e.target.value)}
+                    className="rounded-lg border border-zinc-800 bg-zinc-900 px-2 py-1.5 text-[10px] font-semibold text-zinc-300 outline-none focus:border-zinc-700 transition h-8"
+                  >
+                    <option value="today" className="bg-zinc-950">Today</option>
+                    <option value="3days" className="bg-zinc-950">Last 3 days</option>
+                    <option value="week" className="bg-zinc-950">Last week</option>
+                    <option value="month" className="bg-zinc-950">Last month</option>
+                    <option value="3months" className="bg-zinc-950">Last 3 months</option>
+                    <option value="6months" className="bg-zinc-950">Last 6 months</option>
+                    <option value="all" className="bg-zinc-950">All history</option>
+                    <option value="custom" className="bg-zinc-950">Custom date...</option>
+                  </select>
+                </div>
+
                 <button
                   type="button"
                   onClick={handleExportCSV}
@@ -437,11 +517,34 @@ export default function ClientsPage() {
               </div>
             </div>
 
+            {historyRange === 'custom' && (
+              <div className="bg-zinc-950/20 border-b border-zinc-900 px-5 py-2.5 flex flex-wrap items-center gap-3 text-[10px] text-zinc-400">
+                <div className="flex items-center gap-1.5">
+                  <span className="font-semibold text-zinc-500 uppercase">Start Date:</span>
+                  <input
+                    type="date"
+                    value={customStartDate}
+                    onChange={(e) => setCustomStartDate(e.target.value)}
+                    className="rounded border border-zinc-850 bg-zinc-950/40 p-1 text-[10px] text-zinc-300 outline-none focus:border-zinc-800 font-mono"
+                  />
+                </div>
+                <div className="flex items-center gap-1.5">
+                  <span className="font-semibold text-zinc-500 uppercase">End Date:</span>
+                  <input
+                    type="date"
+                    value={customEndDate}
+                    onChange={(e) => setCustomEndDate(e.target.value)}
+                    className="rounded border border-zinc-850 bg-zinc-950/40 p-1 text-[10px] text-zinc-300 outline-none focus:border-zinc-800 font-mono"
+                  />
+                </div>
+              </div>
+            )}
+
             {/* Tabs selector */}
             <div className="flex border-b border-zinc-900 bg-zinc-950/20 px-5 gap-4">
               <button
                 type="button"
-                onClick={() => { setTradeTypeTab('executed'); setCurrentPage(1); }}
+                onClick={() => { setTradeTypeTab('executed'); }}
                 className={`py-3 px-2 text-xs font-bold uppercase tracking-wider border-b-2 transition-all flex items-center gap-2 ${
                   tradeTypeTab === 'executed'
                     ? 'border-emerald-500 text-zinc-100 font-semibold'
@@ -457,7 +560,7 @@ export default function ClientsPage() {
               </button>
               <button
                 type="button"
-                onClick={() => { setTradeTypeTab('rejected'); setCurrentPage(1); }}
+                onClick={() => { setTradeTypeTab('rejected'); }}
                 className={`py-3 px-2 text-xs font-bold uppercase tracking-wider border-b-2 transition-all flex items-center gap-2 ${
                   tradeTypeTab === 'rejected'
                     ? 'border-red-500 text-zinc-100 font-semibold'
@@ -484,6 +587,18 @@ export default function ClientsPage() {
                     <thead>
                       <tr className="border-b border-zinc-900 bg-zinc-950/20 text-zinc-500 font-medium">
                         <th className="p-4">Ticket</th>
+                        <th className="p-4">
+                          <button
+                            type="button"
+                            onClick={() => setSortOrder(o => o === 'desc' ? 'asc' : 'desc')}
+                            className="flex items-center gap-1 hover:text-zinc-300 font-semibold transition"
+                          >
+                            <span>Time</span>
+                            <span className="text-[9px] text-zinc-500 font-bold font-mono">
+                              ({sortOrder === 'desc' ? 'Newest' : 'Oldest'})
+                            </span>
+                          </button>
+                        </th>
                         <th className="p-4">Symbol</th>
                         <th className="p-4">Action</th>
                         <th className="p-4 text-right">Volume</th>
@@ -497,13 +612,16 @@ export default function ClientsPage() {
                       </tr>
                     </thead>
                     <tbody className="divide-y divide-zinc-900/50">
-                      {paginatedTrades.map((trade) => {
+                      {filteredTrades.map((trade) => {
                         const latencyVal = trade.executionAnalysis?.averageLatency ?? trade.latencyMs ?? (trade.durationSeconds * 1000);
                         const hasHighLatency = latencyVal >= 300;
 
                         return (
                           <tr key={trade.ticket} className="hover:bg-zinc-900/10 transition">
                             <td className="p-4 font-mono font-medium text-zinc-400">{trade.ticket}</td>
+                            <td className="p-4 font-mono text-[10px] text-zinc-500">
+                              {new Date(trade.timeExecuted || trade.timeRequested).toLocaleString()}
+                            </td>
                             <td className="p-4 font-semibold text-zinc-200">{trade.symbol}</td>
                             <td className="p-4">
                               <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold ${
@@ -631,74 +749,11 @@ export default function ClientsPage() {
                   </table>
                 </div>
 
-                {/* Pagination Controls */}
-                <div className="border-t border-zinc-900 bg-zinc-950/20 px-5 py-3.5 flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between text-[11px] text-zinc-400">
-                  <div className="flex items-center gap-2">
-                    <span>Show</span>
-                    <select
-                      value={pageSize}
-                      onChange={(e) => {
-                        setPageSize(Number(e.target.value));
-                        setCurrentPage(1);
-                      }}
-                      className="rounded border border-zinc-850 bg-zinc-950/40 p-1 text-[11px] text-zinc-300 outline-none focus:border-zinc-800"
-                    >
-                      {[10, 25, 50, 100].map((size) => (
-                        <option key={size} value={size} className="bg-zinc-950">
-                          {size}
-                        </option>
-                      ))}
-                    </select>
-                    <span>entries per page</span>
-                    <span className="text-zinc-600 font-mono ml-2">
-                      | Showing {Math.min(filteredTrades.length, (currentPage - 1) * pageSize + 1)}-{Math.min(filteredTrades.length, currentPage * pageSize)} of {filteredTrades.length} entries
-                    </span>
-                  </div>
-                  
-                  <div className="flex items-center gap-1.5 self-end sm:self-auto">
-                    <button
-                      disabled={currentPage === 1}
-                      onClick={() => setCurrentPage((c) => Math.max(c - 1, 1))}
-                      className="rounded border border-zinc-850 bg-zinc-950/20 px-2.5 py-1 hover:bg-zinc-900 hover:text-zinc-200 disabled:opacity-30 transition font-medium"
-                    >
-                      Previous
-                    </button>
-                    {Array.from({ length: totalPages }).map((_, idx) => {
-                      const pageNum = idx + 1;
-                      const isCurrent = pageNum === currentPage;
-                      if (
-                        totalPages > 6 &&
-                        pageNum !== 1 &&
-                        pageNum !== totalPages &&
-                        Math.abs(pageNum - currentPage) > 1
-                      ) {
-                        if (pageNum === 2 || pageNum === totalPages - 1) {
-                          return <span key={pageNum} className="px-1 text-zinc-700 font-bold">...</span>;
-                        }
-                        return null;
-                      }
-                      return (
-                        <button
-                          key={pageNum}
-                          onClick={() => setCurrentPage(pageNum)}
-                          className={`rounded px-2.5 py-1 font-medium transition ${
-                            isCurrent
-                              ? 'bg-zinc-100 text-zinc-950 border border-zinc-100 font-semibold'
-                              : 'border border-zinc-850 bg-zinc-950/20 hover:bg-zinc-900 hover:text-zinc-200'
-                          }`}
-                        >
-                          {pageNum}
-                        </button>
-                      );
-                    })}
-                    <button
-                      disabled={currentPage === totalPages}
-                      onClick={() => setCurrentPage((c) => Math.min(c + 1, totalPages))}
-                      className="rounded border border-zinc-850 bg-zinc-950/20 px-2.5 py-1 hover:bg-zinc-900 hover:text-zinc-200 disabled:opacity-30 transition font-medium"
-                    >
-                      Next
-                    </button>
-                  </div>
+                {/* Total Count Footnote */}
+                <div className="border-t border-zinc-900 bg-zinc-950/20 px-5 py-3.5 flex items-center justify-between text-[11px] text-zinc-400">
+                  <span className="text-zinc-500 font-normal">
+                    Showing all {filteredTrades.length} positions matching the selected time range.
+                  </span>
                 </div>
               </>
             ) : (

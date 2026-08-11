@@ -388,8 +388,19 @@ def get_user_trades(login: str, request: Request):
         if not creds:
             raise HTTPException(status_code=400, detail="Missing MT5 connection headers")
         try:
-            to_ts = int(time.time()) + 86400  # Tomorrow (prevents exclusion due to server-local timezone or clock differences)
-            from_ts = to_ts - (90 * 24 * 3600)  # last 90 days to capture more history
+            params = request.query_params
+            from_ts_param = params.get("from_ts")
+            to_ts_param = params.get("to_ts")
+            
+            if to_ts_param:
+                to_ts = int(float(to_ts_param))
+            else:
+                to_ts = int(time.time()) + 86400
+                
+            if from_ts_param:
+                from_ts = int(float(from_ts_param))
+            else:
+                from_ts = to_ts - (90 * 24 * 3600)
             
             with _LOCK:
                 manager = _acquire_session(creds["server"], creds["port"], creds["login"], creds["password"])
@@ -760,6 +771,27 @@ def get_user_trades(login: str, request: Request):
             
     # Mock Fallback
     trades = MOCK_TRADES.get(login, [])
+    params = request.query_params
+    from_ts_param = params.get("from_ts")
+    to_ts_param = params.get("to_ts")
+    if from_ts_param or to_ts_param:
+        filtered = []
+        import dateutil.parser
+        from_val = int(float(from_ts_param)) if from_ts_param else 0
+        to_val = int(float(to_ts_param)) if to_ts_param else int(time.time()) + 86400
+        for t in trades:
+            t_str = t.get("timeExecuted") or t.get("timeRequested")
+            if t_str:
+                try:
+                    dt = dateutil.parser.isoparse(t_str)
+                    ts = int(dt.timestamp())
+                    if from_val <= ts <= to_val:
+                        filtered.append(t)
+                except Exception:
+                    filtered.append(t)
+            else:
+                filtered.append(t)
+        return {"success": True, "data": filtered}
     return {"success": True, "data": trades}
 
 @app.get("/api/v1/connector/users/{login}/journal")

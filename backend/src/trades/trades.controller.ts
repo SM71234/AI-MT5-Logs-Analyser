@@ -26,6 +26,8 @@ export class TradesController {
       query.login,
       user.id,
       ipAddress,
+      query.from,
+      query.to,
     );
 
     return {

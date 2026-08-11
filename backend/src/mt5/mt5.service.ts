@@ -68,13 +68,29 @@ export class Mt5Service {
   }
 
   // Fetches client trade list
-  async getClientTrades(brokerId: string, login: string, operatorId: string, ipAddress?: string): Promise<any[]> {
+  async getClientTrades(
+    brokerId: string,
+    login: string,
+    operatorId: string,
+    ipAddress?: string,
+    from?: string,
+    to?: string,
+  ): Promise<any[]> {
     const broker = await this.brokersService.findOneWithCredentials(brokerId, operatorId, ipAddress);
 
-    this.logger.log(`Fetching client trades for login #${login} on broker: ${broker.name}`);
+    this.logger.log(`Fetching client trades for login #${login} on broker: ${broker.name} (range: ${from || 'default'} to ${to || 'default'})`);
 
     try {
-      const res = await fetch(`${this.connectorUrl}/api/v1/connector/users/${login}/trades`, {
+      let url = `${this.connectorUrl}/api/v1/connector/users/${login}/trades`;
+      const queryParams = new URLSearchParams();
+      if (from) queryParams.append('from_ts', from);
+      if (to) queryParams.append('to_ts', to);
+      const queryString = queryParams.toString();
+      if (queryString) {
+        url += `?${queryString}`;
+      }
+
+      const res = await fetch(url, {
         headers: {
           'x-mt5-server': broker.serverAddress,
           'x-mt5-port': broker.port.toString(),
