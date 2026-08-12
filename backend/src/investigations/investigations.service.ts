@@ -24,20 +24,46 @@ export class InvestigationsService {
 
   // Creates or retrieves a trade investigation case
   async create(dto: CreateInvestigationDto, operatorId: string, ipAddress?: string): Promise<Investigation> {
-    // 1. Fetch raw logs for the client
+    // 1. Fetch trades first to locate the execution timestamp
+    let trades: any[] = [];
+    try {
+      trades = await this.mt5Service.getClientTrades(dto.brokerId, dto.login, operatorId, ipAddress);
+    } catch (e) {
+      this.logger.warn(`Failed to fetch pre-requisite client trades: ${e.message}`);
+    }
+
+    const targetTrade = trades.find((t) => t.positionId === dto.ticket || t.ticket === dto.ticket);
+
+    let fromTs: number | undefined;
+    let toTs: number | undefined;
+
+    if (targetTrade) {
+      const tradeTimeStr = targetTrade.timeExecuted || targetTrade.timeRequested;
+      if (tradeTimeStr) {
+        const tradeTimeSecs = Math.floor(new Date(tradeTimeStr).getTime() / 1000);
+        // Set window to 30 minutes before and after
+        fromTs = tradeTimeSecs - 1800;
+        toTs = tradeTimeSecs + 1800;
+      }
+    } else {
+      // Fallback for rejected/missing trades: query logs from the last 3 days
+      const nowSecs = Math.floor(Date.now() / 1000);
+      fromTs = nowSecs - (3 * 24 * 3600);
+      toTs = nowSecs;
+    }
+
+    // 2. Fetch raw logs using the highly targeted date range
     const rawLogs = await this.mt5Service.getClientJournal(
       dto.brokerId,
       dto.login,
       operatorId,
       ipAddress,
+      fromTs,
+      toTs,
     );
 
-    // 2. Correlate logs into timelines
+    // 3. Correlate logs into timelines
     const incidents = this.journalEngineService.processLogs(rawLogs);
-    
-    // Find the trade details from the broker's history to get the exact Order/Deal IDs
-    const trades = await this.mt5Service.getClientTrades(dto.brokerId, dto.login, operatorId, ipAddress);
-    const targetTrade = trades.find((t) => t.positionId === dto.ticket || t.ticket === dto.ticket);
     
     let entryIncident;
     let exitIncident = null;

@@ -118,13 +118,25 @@ export class Mt5Service {
   }
 
   // Fetches raw client journals
-  async getClientJournal(brokerId: string, login: string, operatorId: string, ipAddress?: string): Promise<string[]> {
+  async getClientJournal(
+    brokerId: string,
+    login: string,
+    operatorId: string,
+    ipAddress?: string,
+    from?: number,
+    to?: number,
+  ): Promise<string[]> {
     const broker = await this.brokersService.findOneWithCredentials(brokerId, operatorId, ipAddress);
 
-    this.logger.log(`Fetching client journals for login #${login} on broker: ${broker.name}`);
+    this.logger.log(`Fetching client journals for login #${login} on broker: ${broker.name} (range: ${from ?? 'default'} to ${to ?? 'default'})`);
+
+    const queryParams = new URLSearchParams();
+    if (from !== undefined) queryParams.append('from_ts', from.toString());
+    if (to !== undefined) queryParams.append('to_ts', to.toString());
 
     try {
-      const res = await fetch(`${this.connectorUrl}/api/v1/connector/users/${login}/journal`, {
+      const url = `${this.connectorUrl}/api/v1/connector/users/${login}/journal?${queryParams.toString()}`;
+      const res = await fetch(url, {
         headers: {
           'x-mt5-server': broker.serverAddress,
           'x-mt5-port': broker.port.toString(),

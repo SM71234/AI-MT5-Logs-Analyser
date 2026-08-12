@@ -854,30 +854,30 @@ export default function InvestigationWorkspacePage() {
             </div>
 
             {/* AI Chat Feed */}
-            <div className="lg:col-span-5 flex flex-col h-[500px] rounded-xl border border-zinc-900 bg-zinc-900/10 overflow-hidden">
-              <div className="border-b border-zinc-900 bg-zinc-950/40 px-4 py-3 flex items-center gap-2 shrink-0">
-                <MessageSquare className="h-4 w-4 text-zinc-400" />
+            <div className="lg:col-span-5 flex flex-col h-[500px] rounded-xl border border-indigo-900/40 bg-indigo-950/10 shadow-[0_0_30px_rgba(99,102,241,0.03)] overflow-hidden">
+              <div className="border-b border-indigo-900/30 bg-indigo-950/30 px-4 py-3 flex items-center gap-2 shrink-0">
+                <MessageSquare className="h-4 w-4 text-indigo-400" />
                 <span className="text-xs font-semibold tracking-tight text-zinc-200">Operations Assistant Chat</span>
               </div>
 
               {/* Message History Feed */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4 text-xs font-sans">
                 {!latestAiReport ? (
-                  <div className="h-full flex items-center justify-center text-zinc-650 text-center p-6">
+                  <div className="h-full flex items-center justify-center text-zinc-600 text-center p-6">
                     Analyze the transaction first to unlock follow-up chat support.
                   </div>
                 ) : chatMessages.length === 0 ? (
-                  <div className="h-full flex items-center justify-center text-zinc-550 text-center p-6 italic">
+                  <div className="h-full flex items-center justify-center text-zinc-500 text-center p-6 italic">
                     Ask follow-up operations questions (e.g. "why did dealer #5 accept gold at 2352?")
                   </div>
                 ) : (
                   chatMessages.map((msg, idx) => (
                     <div
                       key={idx}
-                      className={`flex flex-col max-w-[85%] rounded-lg p-3 ${
+                      className={`flex flex-col max-w-[85%] rounded-lg p-3 shadow-md ${
                         msg.role === 'user'
                           ? 'bg-zinc-900 border border-zinc-800 text-zinc-100 ml-auto'
-                          : 'bg-zinc-950 border border-zinc-900 text-zinc-300 mr-auto'
+                          : 'bg-indigo-950/40 border border-indigo-900/40 text-zinc-100 mr-auto'
                       }`}
                     >
                       <span className="text-[9px] font-semibold font-mono text-zinc-500 uppercase mb-1">

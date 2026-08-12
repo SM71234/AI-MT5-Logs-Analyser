@@ -741,7 +741,7 @@ export default function ClientsPage() {
                                 disabled={createInvestigationMutation.isPending}
                                 className="inline-flex items-center gap-1 rounded bg-zinc-900 border border-zinc-800 px-2.5 py-1 text-[10px] font-semibold text-zinc-300 hover:bg-zinc-800 hover:text-zinc-50 transition disabled:opacity-50"
                               >
-                                <span>{createInvestigationMutation.isPending && savingTicketId === trade.ticket ? 'Saving...' : 'Investigate'}</span>
+                                <span>{createInvestigationMutation.isPending && savingTicketId === trade.ticket ? 'Loading...' : 'Investigate'}</span>
                               </button>
                             </td>
                           </tr>
