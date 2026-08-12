@@ -219,7 +219,7 @@ export default function BrokersPage() {
   return (
     <div className="relative z-10 flex-1 p-6 lg:p-8 max-w-7xl mx-auto w-full space-y-8">
       {/* Page Title */}
-      <div className="flex items-center justify-between">
+      <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
         <div>
           <h2 className="text-2xl font-bold tracking-tight text-zinc-100">Broker Integrations</h2>
           <p className="text-sm text-zinc-400 mt-1">

@@ -172,7 +172,7 @@ export default function InvestigationWorkspacePage() {
     <div className="relative z-10 flex-1 flex flex-col h-full overflow-hidden bg-zinc-950">
       
       {/* Top Header details */}
-      <header className="border-b border-zinc-900 bg-zinc-950/40 px-6 py-4 flex items-center justify-between shrink-0">
+      <header className="border-b border-zinc-900 bg-zinc-950/40 px-6 py-4 flex flex-col gap-3 md:flex-row md:items-center md:justify-between shrink-0">
         <div className="flex items-center gap-4">
           <button
             onClick={() => navigate('/investigations')}
@@ -272,7 +272,7 @@ export default function InvestigationWorkspacePage() {
       )}
 
       {/* Tabs navigation */}
-      <div className="border-b border-zinc-900 bg-zinc-950/20 px-6 shrink-0 flex">
+      <div className="border-b border-zinc-900 bg-zinc-950/20 px-6 shrink-0 flex overflow-x-auto scrollbar-none whitespace-nowrap">
         <button
           onClick={() => setActiveTab('timeline')}
           className={`px-4 py-3 text-xs font-semibold border-b-2 transition duration-150 ${
