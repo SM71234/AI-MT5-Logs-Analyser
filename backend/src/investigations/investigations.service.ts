@@ -341,8 +341,13 @@ export class InvestigationsService {
     });
 
     if (cachedReport) {
-      this.logger.log(`AI Cache hit for Case ${id}. Returning saved report.`);
-      return cachedReport;
+      if (!cachedReport.response.includes('Simulated metrics') && !cachedReport.response.includes('[Mock AI Response]')) {
+        this.logger.log(`AI Cache hit for Case ${id}. Returning saved report.`);
+        return cachedReport;
+      } else {
+        this.logger.log(`Deleting legacy cached mock AI report for Case ${id} to refresh with real Gemini API.`);
+        await this.prisma.aiReport.delete({ where: { id: cachedReport.id } });
+      }
     }
 
     // 2. Perform AI completions
