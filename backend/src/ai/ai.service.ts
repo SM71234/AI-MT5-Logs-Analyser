@@ -10,7 +10,7 @@ export class AiService {
   private readonly apiKey: string | null;
 
   constructor(private readonly configService: ConfigService) {
-    this.apiKey = this.configService.get<string>('OPENAI_API_KEY') || null;
+    this.apiKey = this.configService.get<string>('GEMINI_API_KEY') || null;
   }
 
   // Generates a structured analysis report
@@ -26,8 +26,8 @@ export class AiService {
     const prompt = this.compileAnalysisPrompt(login, ticketId, symbol, action, volume, metrics, events);
 
     // If API Key is missing, return a detailed mock AI response reflecting the exact dispute metrics
-    if (!this.apiKey || this.apiKey === 'your-openai-api-key') {
-      this.logger.warn('OPENAI_API_KEY is missing or configured as default template. Serving simulated AI report.');
+    if (!this.apiKey || this.apiKey === 'your-gemini-api-key') {
+      this.logger.warn('GEMINI_API_KEY is missing or configured as default template. Serving simulated AI report.');
       await new Promise((resolve) => setTimeout(resolve, 1500)); // simulated latency
       const mockReport = this.generateMockAiResponse(login, ticketId, symbol, action, volume, metrics);
       const validation = this.validateAiReport(mockReport, metrics);
@@ -39,35 +39,42 @@ export class AiService {
     }
 
     try {
-      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${this.apiKey}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`,
         },
         body: JSON.stringify({
-          model: 'gpt-4o-mini', // cost-efficient, fast, and highly capable model
-          messages: [
-            {
-              role: 'system',
-              content: 'You are MT5 AI Journal Analyzer, a senior broker operations compliance investigator. Provide detailed analysis strictly backed by metrics. Never invent facts.',
-            },
+          contents: [
             {
               role: 'user',
-              content: prompt,
+              parts: [
+                {
+                  text: prompt,
+                },
+              ],
             },
           ],
-          temperature: 0.1, // very low temperature to ensure strict adherence to evidence
+          systemInstruction: {
+            parts: [
+              {
+                text: 'You are MT5 AI Journal Analyzer, a senior broker operations compliance investigator. Provide detailed analysis strictly backed by metrics. Never invent facts.',
+              },
+            ],
+          },
+          generationConfig: {
+            temperature: 0.1,
+          },
         }),
       });
 
       if (!res.ok) {
-        const errBody = await res.json();
-        throw new Error(errBody.error?.message || 'OpenAI completion error');
+        const errText = await res.text();
+        throw new Error(`Gemini API error: ${errText}`);
       }
 
       const body = await res.json();
-      const rawText = body.choices[0].message.content || '';
+      const rawText = body.candidates?.[0]?.content?.parts?.[0]?.text || '';
       
       const validation = this.validateAiReport(rawText, metrics);
       if (!validation.isValid) {
@@ -76,7 +83,7 @@ export class AiService {
       }
       return rawText;
     } catch (error: any) {
-      this.logger.error('Failed to contact OpenAI API completions', error);
+      this.logger.error('Failed to contact Gemini API completions', error);
       throw new InternalServerErrorException(`AI Analysis service failed: ${error.message}`);
     }
   }
@@ -88,7 +95,7 @@ export class AiService {
     previousChatHistory: { role: 'user' | 'assistant'; content: string }[],
     userQuestion: string,
   ): Promise<string> {
-    if (!this.apiKey || this.apiKey === 'your-openai-api-key') {
+    if (!this.apiKey || this.apiKey === 'your-gemini-api-key') {
       await new Promise((resolve) => setTimeout(resolve, 800));
       const status = canonicalResult?.status || 'UNKNOWN';
       const isRejected = canonicalResult?.rejection?.isRejected || false;
@@ -113,39 +120,47 @@ CRITICAL RULES:
 2. If the user asks about latencies, slippage, execution prices, or rejection reasons, cite the Canonical Result fields exactly.
 3. If the answer cannot be determined from the provided data, state clearly: "Based on the deterministic logs, this details cannot be determined."`;
 
-    const messages = [
+    const contents = [
+      ...previousChatHistory.map((h) => ({
+        role: h.role === 'assistant' ? 'model' : 'user',
+        parts: [{ text: h.content }],
+      })),
       {
-        role: 'system' as const,
-        content: systemPrompt,
-      },
-      ...previousChatHistory,
-      {
-        role: 'user' as const,
-        content: userQuestion,
+        role: 'user',
+        parts: [{ text: userQuestion }],
       },
     ];
 
     try {
-      const res = await fetch('https://api.openai.com/v1/chat/completions', {
+      const res = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/gemini-1.5-flash:generateContent?key=${this.apiKey}`, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
-          Authorization: `Bearer ${this.apiKey}`,
         },
         body: JSON.stringify({
-          model: 'gpt-4o-mini',
-          messages,
-          temperature: 0.2,
+          contents,
+          systemInstruction: {
+            parts: [
+              {
+                text: systemPrompt,
+              },
+            ],
+          },
+          generationConfig: {
+            temperature: 0.2,
+          },
         }),
       });
 
       if (!res.ok) {
-        throw new Error('OpenAI communication failed');
+        const errText = await res.text();
+        throw new Error(`Gemini API chat error: ${errText}`);
       }
 
       const body = await res.json();
-      return body.choices[0].message.content;
+      return body.candidates?.[0]?.content?.parts?.[0]?.text || 'No response from AI assistant.';
     } catch (error: any) {
+      this.logger.error('Failed to contact Gemini API chat', error);
       throw new InternalServerErrorException('AI Chat follow-up failed');
     }
   }
