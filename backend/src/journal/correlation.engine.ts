@@ -234,6 +234,23 @@ export class CorrelationEngine {
       }
     }
 
+    // Step 3b: Correlate order modification events to client incidents
+    const modifiedEvents = sortedEvents.filter((e) => e.eventType === 'ORDER_MODIFIED');
+    for (const modEv of modifiedEvents) {
+      const ticket = modEv.metadata.ticket;
+      if (!ticket) continue;
+
+      const targetIncident = incidents.find(
+        (incident) => incident.ticketId === ticket || incident.events.some((e) => e.metadata.orderId === ticket || e.metadata.dealId === ticket)
+      );
+
+      if (targetIncident) {
+        if (!targetIncident.events.some((e) => e.rawMessage === modEv.rawMessage)) {
+          targetIncident.events.push(modEv);
+        }
+      }
+    }
+
     // Step 4: Re-sort events chronologically for each incident, and filter duplicate instances
     for (const incident of incidents) {
       const uniqueEvents: NormalizedEvent[] = [];

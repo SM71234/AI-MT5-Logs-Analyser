@@ -22,7 +22,8 @@ export interface NormalizedEvent {
     | 'REQUOTE_ACCEPTED'
     | 'ORDER_EXECUTED'
     | 'ORDER_REJECTED'
-    | 'DEALER_REJECTED';
+    | 'DEALER_REJECTED'
+    | 'ORDER_MODIFIED';
   rawMessage: string;
   login: string;
   metadata: {
@@ -410,6 +411,87 @@ export class NormalizationEngine {
           priceRequested: parseFloat(match[7]),
           rejectedBy: 'Risk Management System',
           rawReason: 'Not enough money',
+        },
+      }),
+    },
+    // 14. Order modify confirm: [Trade] '1375': modify #3381804 buy 0.01 XAUUSD.rcnt sl: 0.00, tp: 4424.54 -> sl: 0.00, tp: 4425.86 (4423.98 / 4424.09)
+    {
+      type: 'ORDER_MODIFIED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+modify\s+#(\d+)\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+sl:\s+([\d\.]+),\s+tp:\s+([\d\.]+)\s+->\s+sl:\s+([\d\.]+),\s+tp:\s+([\d\.]+)\s+\(([\d\.]+)\s*\/\s*([\d\.]+)\)/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[2],
+        metadata: {
+          ticket: match[3],
+          action: match[4].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[5]),
+          symbol: match[6],
+          rawReason: `Modified TP/SL parameters: SL ${match[7]} -> ${match[9]} | TP ${match[8]} -> ${match[10]}`,
+        },
+      }),
+    },
+    // 15. Order modify request: [Trade] '1': request from '1375' (modify #3381804 buy 0.01 XAUUSD.rcnt -> sl: 0.00, tp: 4425.86)
+    {
+      type: 'ORDER_MODIFIED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+request\s+from\s+'(\d+)'\s+\(modify\s+#(\d+)\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+->\s+sl:\s+([\d\.]+),\s+tp:\s+([\d\.]+)\)/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[3],
+        metadata: {
+          ticket: match[4],
+          action: match[5].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[6]),
+          symbol: match[7],
+          rawReason: `Requested modification: SL ${match[8]}, TP ${match[9]}`,
+        },
+      }),
+    },
+    // 16. Order modify confirm status: [Trade] '1': confirm for '1375' (modify #3381804 buy 0.01 XAUUSD.rcnt -> sl: 0.00, tp: 4425.86)(4423.98 / 4424.09)
+    {
+      type: 'ORDER_MODIFIED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+confirm\s+for\s+'(\d+)'\s+\(modify\s+#(\d+)\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+->\s+sl:\s+([\d\.]+),\s+tp:\s+([\d\.]+)\)\(([\d\.]+)\s*\/\s*([\d\.]+)\)/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[3],
+        metadata: {
+          ticket: match[4],
+          action: match[5].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[6]),
+          symbol: match[7],
+          rawReason: `Server confirmed modification: SL ${match[8]}, TP ${match[9]}`,
+        },
+      }),
+    },
+    // 17. Position modified: [Trade] '1375': position modified [#3381804 buy 0.01 XAUUSD.rcnt 4425.36 tp: 4425.86], time 0.49 ms
+    {
+      type: 'ORDER_MODIFIED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+position\s+modified\s+\[#(\d+)\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+([\d\.]+)(?:\s+sl:\s+([\d\.]+))?(?:\s+tp:\s+([\d\.]+))?\]/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[2],
+        metadata: {
+          ticket: match[3],
+          action: match[4].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[5]),
+          symbol: match[6],
+          rawReason: `Position modified at ${match[7]}${match[8] ? `, SL ${match[8]}` : ''}${match[9] ? `, TP ${match[9]}` : ''}`,
+        },
+      }),
+    },
+    // 18. Rule modification: [Trade] '1375': request confirmed, rule 'Auto Execution' (modify #3379113 sell 0.02 XAUUSD.rcnt -> sl: 0.00, tp: 4417.10)
+    {
+      type: 'ORDER_MODIFIED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+request\s+confirmed,\s+rule\s+'(.+?)'\s+\(modify\s+#(\d+)\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+->\s+sl:\s+([\d\.]+),\s+tp:\s+([\d\.]+)\)/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[2],
+        metadata: {
+          ticket: match[4],
+          action: match[5].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[6]),
+          symbol: match[7],
+          rule: match[3],
+          rawReason: `Modification confirmed via rule '${match[3]}': SL ${match[8]}, TP ${match[9]}`,
         },
       }),
     },
