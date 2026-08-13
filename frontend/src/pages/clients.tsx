@@ -130,12 +130,9 @@ export default function ClientsPage() {
   const [searchLogin, setSearchLogin] = useState(() => sessionStorage.getItem('clients_searchLogin') || '');
   
   // Controls when queries are executed
-  const [activeQuery, setActiveQuery] = useState<{ brokerId: string; login: string } | null>(() => {
-    const saved = sessionStorage.getItem('clients_activeQuery');
-    return saved ? JSON.parse(saved) : null;
-  });
+  const [activeQuery, setActiveQuery] = useState<{ brokerId: string; login: string } | null>(null);
 
-  // Sync search fields and query parameters to sessionStorage to preserve across tab transitions
+  // Sync search fields to sessionStorage to preserve inputs across tab transitions
   React.useEffect(() => {
     sessionStorage.setItem('clients_selectedBrokerId', selectedBrokerId);
   }, [selectedBrokerId]);
@@ -143,14 +140,6 @@ export default function ClientsPage() {
   React.useEffect(() => {
     sessionStorage.setItem('clients_searchLogin', searchLogin);
   }, [searchLogin]);
-
-  React.useEffect(() => {
-    if (activeQuery) {
-      sessionStorage.setItem('clients_activeQuery', JSON.stringify(activeQuery));
-    } else {
-      sessionStorage.removeItem('clients_activeQuery');
-    }
-  }, [activeQuery]);
 
   const [tradeSearch, setTradeSearch] = useState('');
   const [tradeTypeTab, setTradeTypeTab] = useState<'executed' | 'rejected'>('executed');
@@ -307,9 +296,22 @@ export default function ClientsPage() {
     });
   }, [trades, tradeSearch, tradeTypeTab, sortOrder]);
 
+  const selectedBroker = brokers?.find((b) => b.id === selectedBrokerId);
+  const isBrokerOffline = selectedBroker ? selectedBroker.status !== 'CONNECTED' : false;
+
+  // Clear query if the active broker goes offline or is disconnected
+  React.useEffect(() => {
+    if (activeQuery && brokers) {
+      const activeBroker = brokers.find((b) => b.id === activeQuery.brokerId);
+      if (!activeBroker || activeBroker.status !== 'CONNECTED') {
+        setActiveQuery(null);
+      }
+    }
+  }, [brokers, activeQuery]);
+
   const handleSearchSubmit = (e: React.FormEvent) => {
     e.preventDefault();
-    if (!selectedBrokerId || !searchLogin.trim()) return;
+    if (!selectedBrokerId || !searchLogin.trim() || isBrokerOffline) return;
     
     const nextQuery = {
       brokerId: selectedBrokerId,
@@ -326,7 +328,7 @@ export default function ClientsPage() {
     }
   };
 
-  const isSearchDisabled = !selectedBrokerId || !searchLogin.trim();
+  const isSearchDisabled = !selectedBrokerId || !searchLogin.trim() || isBrokerOffline;
 
   return (
     <div className="relative z-10 flex-1 p-6 lg:p-8 max-w-7xl mx-auto w-full space-y-8">
@@ -357,6 +359,11 @@ export default function ClientsPage() {
                 </option>
               ))}
             </select>
+            {isBrokerOffline && (
+              <p className="text-[10px] text-amber-500 font-semibold mt-1">
+                ⚠️ Selected broker is offline. Connect it in the Brokers tab.
+              </p>
+            )}
           </div>
 
           <div className="flex-1 space-y-1.5">
