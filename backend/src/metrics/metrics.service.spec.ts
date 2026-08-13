@@ -23,14 +23,14 @@ describe('MetricsService', () => {
       events: [
         {
           timestamp: '2026-08-06T09:59:59.980Z',
-          eventType: 'ORDER_SUBMITTED',
+          eventType: 'REQUEST',
           rawMessage: 'submit',
           login: '1001',
           metadata: { priceRequested: 1.10200 },
         },
         {
           timestamp: '2026-08-06T10:00:00.000Z',
-          eventType: 'ORDER_EXECUTED',
+          eventType: 'DEAL_EXECUTED',
           rawMessage: 'exec',
           login: '1001',
           metadata: { priceExecuted: 1.10200 },
@@ -40,7 +40,7 @@ describe('MetricsService', () => {
 
     const metrics = service.calculate(incident, 5, 0.00001);
 
-    expect(metrics.executionLatencyMs).toBe(20);
+    expect(metrics.totalObservableExecutionTimeMs).toBe(20);
     expect(metrics.slippagePoints).toBe(0.0);
     expect(metrics.slippageType).toBe('Zero');
     expect(metrics.isNormal).toBe(true);
@@ -56,14 +56,14 @@ describe('MetricsService', () => {
       events: [
         {
           timestamp: '2026-08-07T22:50:50.902Z',
-          eventType: 'ORDER_SUBMITTED',
+          eventType: 'REQUEST',
           rawMessage: 'submit',
           login: '910102',
           metadata: { priceRequested: 4349.26 },
         },
         {
           timestamp: '2026-08-07T22:50:51.045Z',
-          eventType: 'ORDER_EXECUTED',
+          eventType: 'DEAL_EXECUTED',
           rawMessage: 'exec',
           login: '910102',
           metadata: { priceExecuted: 4349.36 },
@@ -73,7 +73,7 @@ describe('MetricsService', () => {
 
     const metrics = service.calculate(incident, 2, 0.01);
 
-    expect(metrics.executionLatencyMs).toBe(143);
+    expect(metrics.totalObservableExecutionTimeMs).toBe(143);
     expect(metrics.priceDelta).toBeCloseTo(0.10, 5);
     expect(metrics.slippagePoints).toBe(10.0);
     expect(metrics.slippageType).toBe('Adverse');
@@ -91,14 +91,14 @@ describe('MetricsService', () => {
       events: [
         {
           timestamp: '2026-08-06T10:00:00.000Z',
-          eventType: 'ORDER_SUBMITTED',
+          eventType: 'REQUEST',
           rawMessage: 'submit',
           login: '1001',
           metadata: { priceRequested: 1.10200 },
         },
         {
           timestamp: '2026-08-06T10:00:00.150Z',
-          eventType: 'ORDER_EXECUTED',
+          eventType: 'DEAL_EXECUTED',
           rawMessage: 'exec',
           login: '1001',
           metadata: { priceExecuted: 1.10180 },
@@ -108,7 +108,7 @@ describe('MetricsService', () => {
 
     const metrics = service.calculate(incident, 5, 0.00001);
 
-    expect(metrics.executionLatencyMs).toBe(150);
+    expect(metrics.totalObservableExecutionTimeMs).toBe(150);
     expect(metrics.priceDelta).toBeCloseTo(-0.00020, 5);
     expect(metrics.slippagePoints).toBe(20.0);
     expect(metrics.slippageType).toBe('Favorable');
@@ -124,14 +124,14 @@ describe('MetricsService', () => {
       events: [
         {
           timestamp: '2026-08-07T22:50:55.365Z',
-          eventType: 'ORDER_SUBMITTED',
+          eventType: 'REQUEST',
           rawMessage: 'submit',
           login: '910102',
           metadata: { priceRequested: 4349.01 },
         },
         {
           timestamp: '2026-08-07T22:50:55.538Z',
-          eventType: 'ORDER_EXECUTED',
+          eventType: 'DEAL_EXECUTED',
           rawMessage: 'exec',
           login: '910102',
           metadata: { priceExecuted: 4348.86 },
@@ -141,7 +141,7 @@ describe('MetricsService', () => {
 
     const metrics = service.calculate(incident, 2, 0.01);
 
-    expect(metrics.executionLatencyMs).toBe(173);
+    expect(metrics.totalObservableExecutionTimeMs).toBe(173);
     expect(metrics.priceDelta).toBeCloseTo(-0.15, 5);
     expect(metrics.slippagePoints).toBe(15.0);
     expect(metrics.slippageType).toBe('Adverse');
@@ -159,14 +159,14 @@ describe('MetricsService', () => {
       events: [
         {
           timestamp: '2026-08-06T10:00:00.000Z',
-          eventType: 'ORDER_SUBMITTED',
+          eventType: 'REQUEST',
           rawMessage: 'submit',
           login: '1001',
           metadata: { priceRequested: 1.10200 },
         },
         {
           timestamp: '2026-08-06T10:00:00.200Z',
-          eventType: 'ORDER_EXECUTED',
+          eventType: 'DEAL_EXECUTED',
           rawMessage: 'exec',
           login: '1001',
           metadata: { priceExecuted: 1.10220 },
@@ -176,7 +176,7 @@ describe('MetricsService', () => {
 
     const metrics = service.calculate(incident, 5, 0.00001);
 
-    expect(metrics.executionLatencyMs).toBe(200);
+    expect(metrics.totalObservableExecutionTimeMs).toBe(200);
     expect(metrics.priceDelta).toBeCloseTo(0.00020, 5);
     expect(metrics.slippagePoints).toBe(20.0);
     expect(metrics.slippageType).toBe('Favorable');
@@ -192,14 +192,14 @@ describe('MetricsService', () => {
       events: [
         {
           timestamp: '2026-08-06T10:00:00.000Z',
-          eventType: 'ORDER_SUBMITTED',
+          eventType: 'REQUEST',
           rawMessage: 'submit',
           login: '1001',
           metadata: { priceRequested: 100.0 },
         },
         {
           timestamp: '2026-08-06T10:00:00.100Z',
-          eventType: 'ORDER_EXECUTED',
+          eventType: 'DEAL_EXECUTED',
           rawMessage: 'exec',
           login: '1001',
           metadata: { priceExecuted: 100.5 },
@@ -210,11 +210,10 @@ describe('MetricsService', () => {
     const metrics = service.calculate(incident, null, null);
 
     expect(metrics.slippagePoints).toBeNull();
-    expect(metrics.reason).toBe('Symbol Digits/Point Size not available');
     expect(metrics.priceDelta).toBe(0.5);
   });
 
-  it('should handle rejected trade: executionLatencyMs is null, rejectionLatencyMs is calculated, status is REJECTED', () => {
+  it('should handle rejected trade: totalObservableExecutionTimeMs is null, status is REJECTED', () => {
     const incident: CorrelatedIncident = {
       ticketId: '659',
       login: '910102',
@@ -224,7 +223,7 @@ describe('MetricsService', () => {
       events: [
         {
           timestamp: '2026-08-07T10:00:00.000Z',
-          eventType: 'ORDER_SUBMITTED',
+          eventType: 'REQUEST',
           rawMessage: 'submit',
           login: '910102',
           metadata: { priceRequested: 60000 },
@@ -241,17 +240,16 @@ describe('MetricsService', () => {
 
     const metrics = service.calculate(incident, 2, 0.01);
 
-    expect(metrics.executionLatencyMs).toBeNull();
-    expect(metrics.rejectionLatencyMs).toBe(250);
+    expect(metrics.totalObservableExecutionTimeMs).toBeNull();
     expect(metrics.status).toBe('REJECTED');
     expect(metrics.executed).toBe(false);
     expect(metrics.rejection?.isRejected).toBe(true);
-    expect(metrics.rejection?.reason).toBe('Insufficient margin');
-    expect(metrics.rejection?.rejectedBy).toBe('MT5 Server (Margin Validation)');
-    expect(metrics.rejection?.failedStage).toBe('Server Validation');
+    expect(metrics.rejection?.reason).toBe('not enough money');
+    expect(metrics.rejection?.rejectedBy).toBe('MT5 Server');
+    expect(metrics.rejection?.failedStage).toBe('Execution Request');
   });
 
-  it('should handle incomplete trade: executionLatencyMs is null, status is INCOMPLETE', () => {
+  it('should handle incomplete trade: totalObservableExecutionTimeMs is null, status is INCOMPLETE', () => {
     const incident: CorrelatedIncident = {
       ticketId: '660',
       login: '910102',
@@ -261,7 +259,7 @@ describe('MetricsService', () => {
       events: [
         {
           timestamp: '2026-08-07T10:00:00.000Z',
-          eventType: 'ORDER_SUBMITTED',
+          eventType: 'REQUEST',
           rawMessage: 'submit',
           login: '910102',
           metadata: { priceRequested: 60000 },
@@ -271,8 +269,7 @@ describe('MetricsService', () => {
 
     const metrics = service.calculate(incident, 2, 0.01);
 
-    expect(metrics.executionLatencyMs).toBeNull();
-    expect(metrics.rejectionLatencyMs).toBeNull();
+    expect(metrics.totalObservableExecutionTimeMs).toBeNull();
     expect(metrics.status).toBe('INCOMPLETE');
     expect(metrics.executed).toBe(false);
   });

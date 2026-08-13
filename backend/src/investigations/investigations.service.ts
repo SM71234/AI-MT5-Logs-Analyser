@@ -231,6 +231,91 @@ export class InvestigationsService {
     });
   }
 
+  // Shared method to perform dynamic metrics self-healing & recalculation if needed
+  private async recalculateIfNeeded(caseFile: any): Promise<{ metrics: any; events: any }> {
+    let parsedMetrics = JSON.parse(caseFile.metrics);
+    const parsedEvents = JSON.parse(caseFile.events);
+
+    const isOldFormat = !parsedMetrics.entry || 
+                        parsedMetrics.entry.totalObservableExecutionTimeMs === undefined;
+                        
+    const needsCanonicalResult = !parsedMetrics.canonicalResult;
+
+    const hasCorruptReport = (caseFile.aiReports || []).some((r: any) => r.response.includes('undefined'));
+
+    if (isOldFormat || needsCanonicalResult || hasCorruptReport) {
+      try {
+        this.logger.log(`Performing dynamic metrics recalculation for historical case ID ${caseFile.id}`);
+        
+        // Delete legacy cached AI reports to force fresh generation
+        await this.prisma.aiReport.deleteMany({
+          where: { investigationId: caseFile.id }
+        });
+
+        const rawLines = parsedEvents.map((e: any) => e.rawMessage);
+        const correlated = this.journalEngineService.processLogs(rawLines);
+        
+        // Find matching entry and exit incidents based on trade action names
+        const entryInc = correlated.find(c => c.action === (caseFile.title.includes('BUY') ? 'BUY' : 'SELL'));
+        const exitInc = correlated.find(c => c.action === (caseFile.title.includes('BUY') ? 'SELL' : 'BUY'));
+        
+        if (entryInc) {
+          const entryM = this.metricsService.calculate(entryInc, parsedMetrics.digits || parsedMetrics.entry?.digits, parsedMetrics.pointSize || parsedMetrics.entry?.pointSize);
+          const exitM = exitInc ? this.metricsService.calculate(exitInc, parsedMetrics.digits || parsedMetrics.entry?.digits, parsedMetrics.pointSize || parsedMetrics.entry?.pointSize) : null;
+          
+          const executionAnalysis = this.metricsService.analyzeExecution(entryM, exitM);
+          
+          const combinedRecorrelatedEvents = [...entryInc.events];
+          if (exitInc) {
+            for (const ev of exitInc.events) {
+              if (!combinedRecorrelatedEvents.some((e) => e.timestamp === ev.timestamp && e.eventType === ev.eventType)) {
+                combinedRecorrelatedEvents.push(ev);
+              }
+            }
+          }
+          combinedRecorrelatedEvents.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
+
+          parsedMetrics = {
+            entry: entryM,
+            exit: exitM,
+            summary: {
+              netAdversePriceImpact: executionAnalysis.netSlippage.slippageType === 'Adverse'
+                ? executionAnalysis.netSlippage.slippagePoints
+                : 0,
+              cumulativeLatencyMs: executionAnalysis.cumulativeLatency,
+              averageLatencyMs: executionAnalysis.averageLatency,
+              ...executionAnalysis,
+            },
+            canonicalResult: this.buildCanonicalResult(
+              caseFile.clientLogin,
+              caseFile.ticketId,
+              entryInc,
+              entryM,
+              exitInc || null,
+              exitM,
+              combinedRecorrelatedEvents
+            )
+          };
+          
+          // Persist the corrected metrics and events in the database
+          await this.prisma.investigation.update({
+            where: { id: caseFile.id },
+            data: { 
+              metrics: JSON.stringify(parsedMetrics),
+              events: JSON.stringify(combinedRecorrelatedEvents),
+            }
+          });
+
+          return { metrics: parsedMetrics, events: combinedRecorrelatedEvents };
+        }
+      } catch (err) {
+        this.logger.warn(`Failed to dynamically correct metrics for case ${caseFile.id}: ${err.message}`);
+      }
+    }
+
+    return { metrics: parsedMetrics, events: parsedEvents };
+  }
+
   // Gets detailed case information
   async findOne(id: string): Promise<any> {
     const caseFile = await this.prisma.investigation.findUnique({
@@ -254,69 +339,18 @@ export class InvestigationsService {
       throw new NotFoundException(`Investigation case ID ${id} not found`);
     }
 
-    let parsedMetrics = JSON.parse(caseFile.metrics);
-    const parsedEvents = JSON.parse(caseFile.events);
+    const { metrics, events } = await this.recalculateIfNeeded(caseFile);
 
-    // Dynamic historical case self-healing & recalculation migration
-    const isOldFormat = !parsedMetrics.entry || 
-                        parsedMetrics.entry.priceRequested === undefined || 
-                        parsedMetrics.entry.priceExecuted === undefined;
-                        
-    const needsCanonicalResult = !parsedMetrics.canonicalResult;
-
-    if (isOldFormat || needsCanonicalResult) {
-      try {
-        this.logger.log(`Performing dynamic metrics recalculation for historical case ID ${id}`);
-        const rawLines = parsedEvents.map((e: any) => e.rawMessage);
-        const correlated = this.journalEngineService.processLogs(rawLines);
-        
-        // Find matching entry and exit incidents based on trade action names
-        const entryInc = correlated.find(c => c.action === (caseFile.title.includes('BUY') ? 'BUY' : 'SELL'));
-        const exitInc = correlated.find(c => c.action === (caseFile.title.includes('BUY') ? 'SELL' : 'BUY'));
-        
-        if (entryInc) {
-          const entryM = this.metricsService.calculate(entryInc, parsedMetrics.digits || parsedMetrics.entry?.digits, parsedMetrics.pointSize || parsedMetrics.entry?.pointSize);
-          const exitM = exitInc ? this.metricsService.calculate(exitInc, parsedMetrics.digits || parsedMetrics.entry?.digits, parsedMetrics.pointSize || parsedMetrics.entry?.pointSize) : null;
-          
-          const executionAnalysis = this.metricsService.analyzeExecution(entryM, exitM);
-          
-          parsedMetrics = {
-            entry: entryM,
-            exit: exitM,
-            summary: {
-              netAdversePriceImpact: executionAnalysis.netSlippage.slippageType === 'Adverse'
-                ? executionAnalysis.netSlippage.slippagePoints
-                : 0,
-              cumulativeLatencyMs: executionAnalysis.cumulativeLatency,
-              averageLatencyMs: executionAnalysis.averageLatency,
-              ...executionAnalysis,
-            },
-            canonicalResult: this.buildCanonicalResult(
-              caseFile.clientLogin,
-              caseFile.ticketId,
-              entryInc,
-              entryM,
-              exitInc || null,
-              exitM,
-              parsedEvents
-            )
-          };
-          
-          // Persist the corrected metrics in the database
-          await this.prisma.investigation.update({
-            where: { id },
-            data: { metrics: JSON.stringify(parsedMetrics) }
-          });
-        }
-      } catch (err) {
-        this.logger.warn(`Failed to dynamically correct metrics for case ${id}: ${err.message}`);
-      }
-    }
+    const hasCorruptReport = (caseFile.aiReports || []).some((r: any) => r.response.includes('undefined'));
+    const isOldFormat = !JSON.parse(caseFile.metrics).entry || 
+                        JSON.parse(caseFile.metrics).entry.totalObservableExecutionTimeMs === undefined;
+    const needsCanonicalResult = !JSON.parse(caseFile.metrics).canonicalResult;
 
     return {
       ...caseFile,
-      metrics: parsedMetrics,
-      events: parsedEvents,
+      aiReports: isOldFormat || needsCanonicalResult || hasCorruptReport ? [] : caseFile.aiReports,
+      metrics,
+      events,
     };
   }
 
@@ -350,16 +384,22 @@ export class InvestigationsService {
 
   // Triggers AI Analysis for a case (checks cache first)
   async analyze(id: string, operatorId: string, ipAddress?: string): Promise<any> {
-    const caseFile = await this.prisma.investigation.findUnique({ where: { id } });
+    const caseFile = await this.prisma.investigation.findUnique({
+      where: { id },
+      include: {
+        aiReports: {
+          orderBy: { createdAt: 'desc' },
+        },
+      }
+    });
     if (!caseFile) {
       throw new NotFoundException(`Investigation case not found`);
     }
 
-    const metrics = JSON.parse(caseFile.metrics);
-    const events = JSON.parse(caseFile.events);
+    const { metrics, events } = await this.recalculateIfNeeded(caseFile);
 
     // 1. Generate prompt hash to verify cache hit
-    const promptHash = this.aiService.generatePromptHash(caseFile.ticketId, metrics);
+    const promptHash = this.aiService.generatePromptHash(caseFile.ticketId, metrics.entry || metrics);
 
     // Check if an AI report for this prompt state already exists in DB
     const cachedReport = await this.prisma.aiReport.findFirst({
@@ -382,8 +422,8 @@ export class InvestigationsService {
       caseFile.ticketId,
       caseFile.title.includes('BUY') ? 'BUY' : 'SELL', // simplified for helper
       caseFile.title.split(' — ')[1]?.split(' ')[0] || 'EURUSD',
-      metrics.volume || 1.0,
-      metrics,
+      (metrics.entry || metrics).volume || 1.0,
+      metrics.entry || metrics,
       events,
     );
 
@@ -466,8 +506,8 @@ export class InvestigationsService {
     const executed = entryMetrics.executed;
     const status = entryMetrics.status;
     
-    const openSubmittedEvent = entryIncident.events.find((e: any) => e.eventType === 'ORDER_SUBMITTED');
-    const openExecutedEvent = entryIncident.events.find((e: any) => e.eventType === 'ORDER_EXECUTED');
+    const openSubmittedEvent = entryIncident.events.find((e: any) => e.eventType === 'REQUEST' || e.eventType === 'ORDER_PLACED');
+    const openExecutedEvent = entryIncident.events.find((e: any) => e.eventType === 'DEAL_EXECUTED' || e.eventType === 'ORDER_FILLED');
     const orderId = openSubmittedEvent?.metadata?.orderId || openSubmittedEvent?.metadata?.ticket || null;
     const dealId = openExecutedEvent?.metadata?.dealId || null;
     
@@ -482,33 +522,45 @@ export class InvestigationsService {
       if (dealId) relatedIds.push(`Deal #${dealId}`);
 
       switch (ev.eventType) {
-        case 'ORDER_SUBMITTED':
+        case 'REQUEST':
           explanation = `Client submitted a ${ev.metadata.action || 'trade'} request for ${ev.metadata.volume || '0'} Lot ${ev.metadata.symbol || ''} at price ${ev.metadata.priceRequested || 'market'}.`;
-          technicalDetails = `Order submission event for Client #${ev.login}.`;
+          technicalDetails = `Order request event for Client #${ev.login}.`;
           break;
-        case 'ORDER_ROUTED':
-          explanation = `The order request was routed to dealer desk.`;
-          technicalDetails = `Request transferred to dealers, rule '${ev.metadata.rule || 'Centroid Bridge'}'.`;
+        case 'ROUTED':
+          explanation = `The order request was routed.`;
+          technicalDetails = `Request transferred to server/dealers.`;
           break;
-        case 'DEALER_ACCEPTED':
-          explanation = `Dealer accepted the order request.`;
-          technicalDetails = `Dealer #${ev.metadata.dealerId || 'Desk'} accepted request.`;
+        case 'EXECUTION_REQUEST':
+          explanation = `Execution request was received by dealer/bridge.`;
+          technicalDetails = `Dealer/bridge received execution request.`;
           break;
-        case 'DEALER_REQUOTED':
-          explanation = `Dealer issued a requote to the client.`;
-          technicalDetails = `Requote issued: count ${ev.metadata.requoteCount || 1}.`;
+        case 'EXECUTION_RESPONSE':
+          explanation = `Broker execution response confirmed.`;
+          technicalDetails = `Server/dealer execution confirmation received.`;
           break;
-        case 'ORDER_EXECUTED':
+        case 'DEAL_EXECUTED':
           explanation = `The trade request was successfully executed.`;
           technicalDetails = `Deal performed ${ev.metadata.dealId ? `[#${ev.metadata.dealId}]` : ''} at price ${ev.metadata.priceExecuted}.`;
           break;
-        case 'ORDER_REJECTED':
-          explanation = `The MT5 server rejected the order request.`;
-          technicalDetails = `Order #${ev.metadata.orderId || ticketId} rejected: "${ev.metadata.rawReason || 'N/A'}".`;
+        case 'ORDER_PLACED':
+          explanation = `Pending order placed in system.`;
+          technicalDetails = `Pending order #${ev.metadata.orderId || ticketId} placed: price ${ev.metadata.priceRequested}.`;
           break;
-        case 'DEALER_REJECTED':
-          explanation = `Manual dealer rejected the order request.`;
-          technicalDetails = `Dealer #${ev.metadata.dealerId || 'Desk'} rejected: "${ev.metadata.rawReason || 'N/A'}".`;
+        case 'ORDER_TRIGGERED':
+          explanation = `Pending order was triggered.`;
+          technicalDetails = `Pending order #${ev.metadata.orderId || ticketId} triggered.`;
+          break;
+        case 'ORDER_FILLED':
+          explanation = `Order was filled.`;
+          technicalDetails = `Order #${ev.metadata.orderId || ticketId} filled.`;
+          break;
+        case 'ORDER_REJECTED':
+          explanation = `The MT5 server/dealer rejected the request.`;
+          technicalDetails = `Request rejected: "${ev.metadata.rawReason || 'N/A'}".`;
+          break;
+        case 'ORDER_CANCELLED':
+          explanation = `The pending order was cancelled.`;
+          technicalDetails = `Pending order #${ev.metadata.orderId || ticketId} cancelled.`;
           break;
         default:
           explanation = ev.rawMessage;
@@ -532,17 +584,20 @@ export class InvestigationsService {
       let type: 'FACT' | 'CALCULATION' | 'INFERENCE' | 'UNKNOWN' = 'FACT';
 
       switch (ev.eventType) {
-        case 'ORDER_SUBMITTED':
+        case 'REQUEST':
           claim = `Client submitted trade request for ${ev.metadata.symbol}`;
           type = 'FACT';
           break;
-        case 'ORDER_EXECUTED':
+        case 'DEAL_EXECUTED':
           claim = `Trade request executed at price ${ev.metadata.priceExecuted}`;
           type = 'FACT';
           break;
         case 'ORDER_REJECTED':
-        case 'DEALER_REJECTED':
-          claim = `Trade request was explicitly rejected by ${entryMetrics.rejection?.rejectedBy || 'system'}`;
+          claim = `Trade request was explicitly rejected by system/dealer`;
+          type = 'FACT';
+          break;
+        case 'ORDER_CANCELLED':
+          claim = `Trade order was cancelled`;
           type = 'FACT';
           break;
         default:
@@ -562,7 +617,7 @@ export class InvestigationsService {
 
     // Deterministic confidence calculation
     let confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN' = 'UNKNOWN';
-    if (executed && entryMetrics.executionLatencyMs !== null) {
+    if (executed && entryMetrics.totalObservableExecutionTimeMs !== null) {
       confidence = 'HIGH';
     } else if (isRejected && entryMetrics.rejection?.rawReason) {
       confidence = 'HIGH';
@@ -599,10 +654,10 @@ export class InvestigationsService {
       execution: {
         executed,
         executionPrice: entryMetrics.priceExecuted ?? null,
-        slippagePips: entryMetrics.slippagePips,
+        slippagePips: entryMetrics.slippagePoints,
         slippagePoints: entryMetrics.slippagePoints,
         slippageType: entryMetrics.slippageType,
-        executionLatencyMs: entryMetrics.executionLatencyMs,
+        executionLatencyMs: entryMetrics.totalObservableExecutionTimeMs,
       },
       rejection: {
         isRejected,
@@ -611,7 +666,7 @@ export class InvestigationsService {
         rejectedBy: entryMetrics.rejection?.rejectedBy ?? null,
         failedStage: entryMetrics.rejection?.failedStage ?? null,
         lastSuccessfulStage: entryMetrics.rejection?.lastSuccessfulStage ?? null,
-        rejectionLatencyMs: entryMetrics.rejectionLatencyMs,
+        rejectionLatencyMs: entryMetrics.totalObservableExecutionTimeMs,
       },
       executionAnalysis,
       timeline,

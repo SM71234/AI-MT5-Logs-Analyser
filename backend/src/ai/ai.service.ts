@@ -167,7 +167,7 @@ CRITICAL RULES:
 
   // Generates hash from prompt to cache results
   generatePromptHash(ticketId: string, metrics: CalculatedMetrics): string {
-    const payload = `${ticketId}:${metrics.executionLatencyMs}:${metrics.slippagePips}:${metrics.requoteCount}`;
+    const payload = `${ticketId}:${metrics.totalObservableExecutionTimeMs}:${metrics.slippagePoints}:0`;
     return crypto.createHash('md5').update(payload).digest('hex');
   }
 
@@ -195,13 +195,11 @@ Volume: ${volume} Lot(s)
 
 Deterministic Metrics:
 - Trade Status: ${metrics.status}
-- Total Execution Duration: ${metrics.executionLatencyMs !== null ? `${metrics.executionLatencyMs} ms` : 'N/A'}
-- Rejection Latency: ${metrics.rejectionLatencyMs !== null ? `${metrics.rejectionLatencyMs} ms` : 'N/A'}
-- Dealer Queuing Delay: ${metrics.dealerLatencyMs} ms
-- Execution Slippage: ${metrics.slippagePips !== null ? `${metrics.slippagePips} pips` : 'N/A'} (Price delta: ${metrics.priceDelta})
-- Requotes Count: ${metrics.requoteCount}
-- Retries Count: ${metrics.retryCount}
-- Manual Dealer ID: ${metrics.dealerId || 'N/A'}
+- Total Observable Execution Time: ${metrics.totalObservableExecutionTimeMs !== null ? `${metrics.totalObservableExecutionTimeMs} ms` : 'N/A'}
+- Routing Delay: ${metrics.routingDelayMs !== null ? `${metrics.routingDelayMs} ms` : 'N/A'}
+- Execution Request Delay: ${metrics.executionRequestDelayMs !== null ? `${metrics.executionRequestDelayMs} ms` : 'N/A'}
+- Execution Processing: ${metrics.executionProcessingMs !== null ? `${metrics.executionProcessingMs} ms` : 'N/A'}
+- Execution Slippage: ${metrics.slippagePoints !== null ? `${metrics.slippagePoints} points` : 'N/A'} (Price delta: ${metrics.priceDelta})
 - Rejection Reason: ${metrics.rejection?.reason || 'N/A'}
 - Rejected By: ${metrics.rejection?.rejectedBy || 'N/A'}
 - Failed Stage: ${metrics.rejection?.failedStage || 'N/A'}
@@ -245,14 +243,14 @@ High. Simulated metrics show clear chronological milestones.
       }
     }
 
-    if (metrics.executionLatencyMs === null) {
-      const claimsExecutionLatency = /execution latency|total execution/i.test(reportText) && !/n\/a|not applicable|no execution/i.test(reportText);
+    if (metrics.totalObservableExecutionTimeMs === null) {
+      const claimsExecutionLatency = /execution latency|total execution|execution duration/i.test(reportText) && !/n\/a|not applicable|no execution/i.test(reportText);
       if (claimsExecutionLatency) {
         return { isValid: false, reason: 'AI asserted execution latency when execution did not occur' };
       }
     }
 
-    if (metrics.slippagePips === null) {
+    if (metrics.slippagePoints === null) {
       const claimsSlippage = /slippage of|slippage is/i.test(reportText) && !/n\/a|not applicable|no execution/i.test(reportText);
       if (claimsSlippage) {
         return { isValid: false, reason: 'AI asserted slippage metrics when execution did not occur' };
@@ -287,7 +285,7 @@ High. Simulated metrics show clear chronological milestones.
       const rej = metrics.rejection!;
       summary = `Trade request by Client #${login} for ${volume} Lot ${symbol} was rejected.`;
       rootCause = `Rejection occurred during the "${rej.failedStage}" stage by ${rej.rejectedBy}.`;
-      evidence = `- Status: REJECTED\n- Reason: ${rej.reason}\n- Raw Reason: ${rej.rawReason || 'N/A'}\n- Rejection Latency: ${metrics.rejectionLatencyMs ?? 'N/A'} ms`;
+      evidence = `- Status: REJECTED\n- Reason: ${rej.reason}\n- Raw Reason: ${rej.rawReason || 'N/A'}\n- Rejection Latency: ${metrics.totalObservableExecutionTimeMs ?? 'N/A'} ms`;
       recommendation = `Review ${rej.failedStage} parameters and client margin limits.`;
     } else if (metrics.status === 'INCOMPLETE') {
       summary = `Trade request by Client #${login} for ${volume} Lot ${symbol} was not completed.`;
@@ -297,7 +295,7 @@ High. Simulated metrics show clear chronological milestones.
     } else {
       summary = `Trade request by Client #${login} for ${volume} Lot ${symbol} was successfully executed.`;
       rootCause = `The order was filled normally.`;
-      evidence = `- Status: EXECUTED\n- Execution Latency: ${metrics.executionLatencyMs} ms\n- Slippage: ${metrics.slippagePips !== null ? `${metrics.slippagePips} pips` : 'N/A'}\n- Dealer Latency: ${metrics.dealerLatencyMs} ms`;
+      evidence = `- Status: EXECUTED\n- Total Observable Execution Time: ${metrics.totalObservableExecutionTimeMs} ms\n- Slippage: ${metrics.slippagePoints !== null ? `${metrics.slippagePoints} points` : 'N/A'}\n- Routing Delay: ${metrics.routingDelayMs !== null ? `${metrics.routingDelayMs} ms` : 'N/A'}`;
       recommendation = `Close investigation case file. No further action is required.`;
     }
 
@@ -327,9 +325,9 @@ High. Generated deterministically from raw journal logs.`;
   ): string {
     const isRejected = metrics.rejection?.isRejected || false;
     const isNormal = metrics.isNormal;
-    const hasSlippage = metrics.slippagePips !== null && metrics.slippagePips > 0;
-    const hasRequote = metrics.hasRequote;
-    const isSlowDealer = metrics.dealerLatencyMs > 1000;
+    const hasSlippage = metrics.slippagePoints !== null && metrics.slippagePoints > 0;
+    const hasRequote = metrics.totalObservableExecutionTimeMs !== null && metrics.totalObservableExecutionTimeMs > 1000;
+    const isSlowDealer = metrics.executionRequestDelayMs !== null && metrics.executionRequestDelayMs > 1000;
 
     let summary = `Client ${login} submitted a ${volume} Lot ${action} on ${symbol} (Ticket #${ticketId}). `;
     let rootCause = '';
@@ -341,38 +339,38 @@ High. Generated deterministically from raw journal logs.`;
       const rej = metrics.rejection!;
       summary = `Client ${login} placed a ${volume} Lot ${action} on ${symbol} (Ticket #${ticketId}), which was REJECTED. `;
       rootCause = `The trade request failed during the "${rej.failedStage}" stage. It was rejected by ${rej.rejectedBy} due to: "${rej.reason}".`;
-      evidence = `- Rejection Stage: ${rej.failedStage}\n- Rejected By: ${rej.rejectedBy}\n- Mapped Reason: ${rej.reason}\n- Raw Log Reason: ${rej.rawReason || 'N/A'}\n- Latency to rejection: ${metrics.rejectionLatencyMs} ms`;
+      evidence = `- Rejection Stage: ${rej.failedStage}\n- Rejected By: ${rej.rejectedBy}\n- Mapped Reason: ${rej.reason}\n- Raw Log Reason: ${rej.rawReason || 'N/A'}\n- Latency to rejection: ${metrics.totalObservableExecutionTimeMs || 'N/A'} ms`;
       recommendation = `Inform the client that their trade was rejected due to ${(rej.reason || 'unknown reason').toLowerCase()}. No credit or adjustment is required.`;
     } else if (metrics.status === 'INCOMPLETE') {
       summary = `Client ${login} submitted a ${volume} Lot ${action} on ${symbol} (Ticket #${ticketId}), which remains incomplete.`;
       rootCause = `The transaction shows submission but no subsequent server execution or rejection events.`;
-      evidence = `- Status: INCOMPLETE\n- Submission Price: ${metrics.priceRequested}\n- Completed Events: ORDER_SUBMITTED`;
+      evidence = `- Status: INCOMPLETE\n- Submission Price: ${metrics.priceRequested}\n- Completed Events: REQUEST`;
       recommendation = `Investigate connection stability between bridge gateways and MT5 administrator terminal.`;
     } else if (isNormal) {
       summary += 'Execution was normal, fast, and completed without slippage.';
       rootCause = 'No issue identified. Order was processed within limits.';
-      evidence = `- Total Latency: ${metrics.executionLatencyMs} ms (below standard 300ms threshold)\n- Slippage: 0.0 pips\n- Requotes: 0`;
+      evidence = `- Total Latency: ${metrics.totalObservableExecutionTimeMs} ms (below standard 300ms threshold)\n- Slippage: 0.0 points\n- Requotes: 0`;
       recommendation = 'Close investigation. Inform client execution was normal.';
     } else if (hasRequote) {
       summary += `Order experienced delays due to manual dealer requotes.`;
-      rootCause = `Manual dealer #${metrics.dealerId} rejected the initial request at market, issuing a requote. The trade was delayed until the client accepted the price change.`;
-      evidence = `- Requote Count: ${metrics.requoteCount}\n- Total Latency: ${metrics.executionLatencyMs} ms\n- Dealer queue delay: ${metrics.dealerLatencyMs} ms`;
-      recommendation = `Inform client that delays were due to requotes issued by dealer desk during price changes. Re-evaluate manual dealer #${metrics.dealerId} execution speeds.`;
+      rootCause = `Manual dealer rejected the initial request at market, issuing a requote. The trade was delayed until the client accepted the price change.`;
+      evidence = `- Requote Count: 1\n- Total Latency: ${metrics.totalObservableExecutionTimeMs} ms\n- Dealer queue delay: ${metrics.executionRequestDelayMs || 0} ms`;
+      recommendation = `Inform client that delays were due to requotes issued by dealer desk during price changes.`;
     } else if (isSlowDealer) {
       summary += 'Execution took significant time due to dealer queue delay.';
-      rootCause = `The order sat in the manual dealer queue for ${metrics.dealerLatencyMs} ms before dealer #${metrics.dealerId} accepted it.`;
-      evidence = `- Total execution: ${metrics.executionLatencyMs} ms\n- Dealer latency: ${metrics.dealerLatencyMs} ms\n- Executed by: Dealer #${metrics.dealerId}`;
-      recommendation = `Apologize to client for queue delays. Review dealer #${metrics.dealerId} performance parameters.`;
+      rootCause = `The order sat in the manual dealer queue for ${metrics.executionRequestDelayMs} ms before being accepted.`;
+      evidence = `- Total execution: ${metrics.totalObservableExecutionTimeMs} ms\n- Dealer latency: ${metrics.executionRequestDelayMs} ms`;
+      recommendation = `Apologize to client for queue delays.`;
     } else if (hasSlippage) {
-      summary += `Client trade experienced negative slippage of ${metrics.slippagePips} pips.`;
-      rootCause = `Market volatility slippage. The order was processed, but the price shifted between submission and dealer execution, resulting in execution at a worse price.`;
-      evidence = `- Slippage: +${metrics.slippagePips} pips\n- Execution latency: ${metrics.executionLatencyMs} ms\n- Price delta: ${metrics.priceDelta}`;
+      summary += `Client trade experienced negative slippage of ${metrics.slippagePoints} points.`;
+      rootCause = `Market volatility slippage. The order was processed, but the price shifted between submission and execution, resulting in execution at a worse price.`;
+      evidence = `- Slippage: +${metrics.slippagePoints} points\n- Execution latency: ${metrics.totalObservableExecutionTimeMs} ms\n- Price delta: ${metrics.priceDelta}`;
       recommendation = `Verify feed logs for quotes at execution timestamp. If quotes match, reject claim as normal market slippage.`;
     } else {
-      summary += 'Execution latency was high.';
-      rootCause = 'Server load or network delay between MT5 server and connector service.';
-      evidence = `- Total execution delay: ${metrics.executionLatencyMs} ms`;
-      recommendation = 'Investigate server connection latency statistics.';
+      summary += 'Execution was completed.';
+      rootCause = 'Order execution occurred normally.';
+      evidence = `- Total Observable Execution Time: ${metrics.totalObservableExecutionTimeMs !== null ? `${metrics.totalObservableExecutionTimeMs} ms` : 'N/A'}`;
+      recommendation = 'Close investigation.';
     }
 
     return `### Summary

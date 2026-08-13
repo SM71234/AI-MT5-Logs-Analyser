@@ -3,7 +3,7 @@ import { InvestigationsService } from './investigations.service';
 import { PrismaService } from '../prisma/prisma.service';
 import { Mt5Service } from '../mt5/mt5.service';
 import { JournalEngineService } from '../journal/journal-engine.service';
-import { MetricsService } from '../metrics/metrics.service';
+import { MetricsService, CalculatedMetrics } from '../metrics/metrics.service';
 import { AiService } from '../ai/ai.service';
 import { NotFoundException } from '@nestjs/common';
 
@@ -52,10 +52,10 @@ describe('InvestigationsService', () => {
         netSlippage: { slippagePoints: entry?.slippagePoints || 0, slippageType: entry?.slippageType || 'Zero' },
         grossAdverseSlippage: entry?.slippageType === 'Adverse' ? entry?.slippagePoints || 0 : 0,
         grossFavorableSlippage: entry?.slippageType === 'Favorable' ? entry?.slippagePoints || 0 : 0,
-        entryLatency: entry?.executionLatencyMs || null,
-        exitLatency: exit?.executionLatencyMs || null,
-        cumulativeLatency: (entry?.executionLatencyMs || 0) + (exit?.executionLatencyMs || 0),
-        averageLatency: entry?.executionLatencyMs || null,
+        entryLatency: entry?.totalObservableExecutionTimeMs || null,
+        exitLatency: exit?.totalObservableExecutionTimeMs || null,
+        cumulativeLatency: (entry?.totalObservableExecutionTimeMs || 0) + (exit?.totalObservableExecutionTimeMs || 0),
+        averageLatency: entry?.totalObservableExecutionTimeMs || null,
       })),
     };
 
@@ -111,7 +111,7 @@ describe('InvestigationsService', () => {
         events: [
           {
             timestamp: '2026-08-06T10:00:00.000Z',
-            eventType: 'ORDER_EXECUTED',
+            eventType: 'DEAL_EXECUTED',
             rawMessage: 'deal',
             login: '1001',
             metadata: { dealId: '200' },
@@ -124,7 +124,7 @@ describe('InvestigationsService', () => {
 
       const metricsService = moduleRef.get(MetricsService);
       (metricsService.calculate as jest.Mock).mockReturnValue({
-        executionLatencyMs: 100,
+        totalObservableExecutionTimeMs: 100,
         slippagePoints: 5,
         slippageType: 'Adverse',
       });

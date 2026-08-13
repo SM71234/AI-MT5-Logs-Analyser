@@ -5,7 +5,7 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { 
   ArrowLeft, Database, User, Calendar, Activity, 
   Clock, AlertTriangle, MessageSquare, 
-  Send, Plus, FileText, CheckCircle, HelpCircle
+  Send, Plus, FileText, CheckCircle, HelpCircle, XCircle
 } from 'lucide-react';
 
 interface Note {
@@ -239,21 +239,21 @@ export default function InvestigationWorkspacePage() {
               {metrics.canonicalResult.status === 'EXECUTED' && (
                 <>
                   The trade request for <strong>{metrics.canonicalResult.trade.volume} Lot {metrics.canonicalResult.trade.symbol}</strong> was successfully executed at price <strong>{metrics.canonicalResult.execution.executionPrice}</strong>.
-                  {metrics.canonicalResult.executionAnalysis?.exitExecution ? (
+                  {metrics.exit ? (
                     <>
-                      {' '}Open execution latency was <strong>{metrics.canonicalResult.executionAnalysis.entryLatency !== null && metrics.canonicalResult.executionAnalysis.entryLatency !== undefined ? `${metrics.canonicalResult.executionAnalysis.entryLatency.toFixed(0)} ms` : `${metrics.canonicalResult.execution.executionLatencyMs} ms`}</strong>, and Close execution latency was <strong>{metrics.canonicalResult.executionAnalysis.exitLatency !== null && metrics.canonicalResult.executionAnalysis.exitLatency !== undefined ? `${metrics.canonicalResult.executionAnalysis.exitLatency.toFixed(0)} ms` : 'N/A'}</strong>
+                      {' '}Open execution time was <strong>{metrics.entry?.totalObservableExecutionTimeMs !== null && metrics.entry?.totalObservableExecutionTimeMs !== undefined ? `${metrics.entry.totalObservableExecutionTimeMs.toFixed(0)} ms` : 'N/A'}</strong>, and Close execution time was <strong>{metrics.exit?.totalObservableExecutionTimeMs !== null && metrics.exit?.totalObservableExecutionTimeMs !== undefined ? `${metrics.exit.totalObservableExecutionTimeMs.toFixed(0)} ms` : 'N/A'}</strong>
                     </>
                   ) : (
                     <>
-                      {' '}Execution latency was <strong>{metrics.canonicalResult.execution.executionLatencyMs} ms</strong>
+                      {' '}Execution time was <strong>{metrics.entry?.totalObservableExecutionTimeMs !== null && metrics.entry?.totalObservableExecutionTimeMs !== undefined ? `${metrics.entry.totalObservableExecutionTimeMs.toFixed(0)} ms` : 'N/A'}</strong>
                     </>
                   )}
-                  {' '}with <strong>{metrics.canonicalResult.executionAnalysis?.netSlippage ? `${metrics.canonicalResult.executionAnalysis.netSlippage.slippagePoints} points ${metrics.canonicalResult.executionAnalysis.netSlippage.slippageType === 'Adverse' ? 'Adverse' : metrics.canonicalResult.executionAnalysis.netSlippage.slippageType === 'Favorable' ? 'Favorable' : 'Zero'}` : (metrics.canonicalResult.execution.slippagePoints !== null ? `${metrics.canonicalResult.execution.slippagePoints} points` : 'no')}</strong> slippage.
+                  {' '}with <strong>{metrics.summary?.netSlippage ? `${metrics.summary.netSlippage.slippagePoints} points ${metrics.summary.netSlippage.slippageType}` : 'no'}</strong> slippage.
                 </>
               )}
               {metrics.canonicalResult.status === 'REJECTED' && (
                 <>
-                  The trade request was explicitly rejected during the <strong>{metrics.canonicalResult.rejection.failedStage}</strong> stage by <strong>{metrics.canonicalResult.rejection.rejectedBy}</strong> due to: <strong>"{metrics.canonicalResult.rejection.reason}"</strong>. Rejection latency was <strong>{metrics.canonicalResult.rejection.rejectionLatencyMs} ms</strong>.
+                  The trade request was explicitly rejected during the <strong>{metrics.entry?.rejection?.failedStage || 'execution'}</strong> stage by <strong>{metrics.entry?.rejection?.rejectedBy || 'the system'}</strong> due to: <strong>"{metrics.entry?.rejection?.reason || 'unknown'}"</strong>.
                 </>
               )}
               {metrics.canonicalResult.status === 'INCOMPLETE' && (
@@ -408,27 +408,32 @@ export default function InvestigationWorkspacePage() {
                 })
               ) : (
                 (caseFile.events || []).map((event, idx) => {
-                  const isExecuted = event.eventType === 'ORDER_EXECUTED';
-                  const isRequoted = event.eventType === 'DEALER_REQUOTED';
-
-                  return (
-                    <div key={idx} className="relative group">
-                      {/* Visual node status dot */}
-                      <div className={`absolute -left-[30px] top-0 flex h-4 w-4 items-center justify-center rounded-full border bg-zinc-950 ${
-                        isExecuted
-                          ? 'border-emerald-500 text-emerald-400'
-                          : isRequoted
-                          ? 'border-amber-500 text-amber-400'
-                          : 'border-zinc-800 text-zinc-500'
-                      }`}>
-                        {isExecuted ? (
-                          <CheckCircle className="h-2.5 w-2.5 fill-current" />
-                        ) : isRequoted ? (
-                          <AlertTriangle className="h-2.5 w-2.5 fill-current" />
-                        ) : (
-                          <span className="h-1 w-1 rounded-full bg-zinc-500" />
-                        )}
-                      </div>
+                  const isExecuted = event.eventType === 'DEAL_EXECUTED' || event.eventType === 'ORDER_FILLED';
+                  const isRejected = event.eventType === 'ORDER_REJECTED' || event.eventType === 'ORDER_CANCELLED';
+                  const isRequoted = event.eventType === 'EXECUTION_RESPONSE' && event.metadata?.requotePrice !== undefined;
+ 
+                   return (
+                     <div key={idx} className="relative group">
+                       {/* Visual node status dot */}
+                       <div className={`absolute -left-[30px] top-0 flex h-4 w-4 items-center justify-center rounded-full border bg-zinc-950 ${
+                         isExecuted
+                           ? 'border-emerald-500 text-emerald-400'
+                           : isRejected
+                           ? 'border-red-500 text-red-400'
+                           : isRequoted
+                           ? 'border-amber-500 text-amber-400'
+                           : 'border-zinc-800 text-zinc-500'
+                       }`}>
+                         {isExecuted ? (
+                           <CheckCircle className="h-2.5 w-2.5 fill-current" />
+                         ) : isRejected ? (
+                           <XCircle className="h-2.5 w-2.5 fill-current" />
+                         ) : isRequoted ? (
+                           <AlertTriangle className="h-2.5 w-2.5 fill-current" />
+                         ) : (
+                           <span className="h-1 w-1 rounded-full bg-zinc-500" />
+                         )}
+                       </div>
 
                       <div className="space-y-1">
                         <div className="flex items-center gap-3">
@@ -560,17 +565,45 @@ export default function InvestigationWorkspacePage() {
                     </div>
 
                     <div>
-                      <span className="text-[10px] text-zinc-500 block">Execution Latency</span>
-                      <span className="text-zinc-300 font-semibold mt-1 block">
-                        {entry.executionLatencyMs !== null && entry.executionLatencyMs !== undefined ? `${entry.executionLatencyMs} ms` : 'N/A'}
+                      <span className="text-[10px] text-zinc-500 block">Total Observable Execution Time</span>
+                      <span className="text-zinc-100 font-semibold mt-1 block">
+                        {entry.totalObservableExecutionTimeMs !== null && entry.totalObservableExecutionTimeMs !== undefined ? `${entry.totalObservableExecutionTimeMs} ms` : 'N/A'}
                       </span>
                     </div>
 
-                    {entry.rejectionLatencyMs !== null && entry.rejectionLatencyMs !== undefined && (
+                    <div>
+                      <span className="text-[10px] text-zinc-500 block">Routing Delay</span>
+                      <span className="text-zinc-300 font-semibold mt-1 block">
+                        {entry.routingDelayMs !== null && entry.routingDelayMs !== undefined ? `${entry.routingDelayMs} ms` : 'N/A'}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="text-[10px] text-zinc-500 block">Execution Request Delay</span>
+                      <span className="text-zinc-300 font-semibold mt-1 block">
+                        {entry.executionRequestDelayMs !== null && entry.executionRequestDelayMs !== undefined ? `${entry.executionRequestDelayMs} ms` : 'N/A'}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="text-[10px] text-zinc-500 block">Execution Processing</span>
+                      <span className="text-zinc-300 font-semibold mt-1 block">
+                        {entry.executionProcessingMs !== null && entry.executionProcessingMs !== undefined ? `${entry.executionProcessingMs} ms` : 'N/A'}
+                      </span>
+                    </div>
+
+                    <div>
+                      <span className="text-[10px] text-zinc-500 block">Dealer/Bridge Response Time</span>
+                      <span className="text-zinc-300 font-semibold mt-1 block">
+                        {entry.dealerBridgeResponseTimeMs !== null && entry.dealerBridgeResponseTimeMs !== undefined ? `${entry.dealerBridgeResponseTimeMs} ms` : 'N/A'}
+                      </span>
+                    </div>
+
+                    {entry.pendingWaitingTimeMs !== null && entry.pendingWaitingTimeMs !== undefined && (
                       <div>
-                        <span className="text-[10px] text-red-400 block font-semibold">Rejection Latency</span>
-                        <span className="text-red-400 font-bold mt-1 block">
-                          {entry.rejectionLatencyMs} ms
+                        <span className="text-[10px] text-zinc-500 block">Pending Waiting Time</span>
+                        <span className="text-zinc-300 font-semibold mt-1 block">
+                          {entry.pendingWaitingTimeMs} ms
                         </span>
                       </div>
                     )}
@@ -658,11 +691,48 @@ export default function InvestigationWorkspacePage() {
                       </div>
 
                       <div>
-                        <span className="text-[10px] text-zinc-500 block">Execution Latency</span>
-                        <span className="text-zinc-300 font-semibold mt-1 block">
-                          {exit.executionLatencyMs !== null && exit.executionLatencyMs !== undefined ? `${exit.executionLatencyMs} ms` : 'N/A'}
+                        <span className="text-[10px] text-zinc-500 block">Total Observable Execution Time</span>
+                        <span className="text-zinc-100 font-semibold mt-1 block">
+                          {exit.totalObservableExecutionTimeMs !== null && exit.totalObservableExecutionTimeMs !== undefined ? `${exit.totalObservableExecutionTimeMs} ms` : 'N/A'}
                         </span>
                       </div>
+
+                      <div>
+                        <span className="text-[10px] text-zinc-500 block">Routing Delay</span>
+                        <span className="text-zinc-300 font-semibold mt-1 block">
+                          {exit.routingDelayMs !== null && exit.routingDelayMs !== undefined ? `${exit.routingDelayMs} ms` : 'N/A'}
+                        </span>
+                      </div>
+
+                      <div>
+                        <span className="text-[10px] text-zinc-500 block">Execution Request Delay</span>
+                        <span className="text-zinc-300 font-semibold mt-1 block">
+                          {exit.executionRequestDelayMs !== null && exit.executionRequestDelayMs !== undefined ? `${exit.executionRequestDelayMs} ms` : 'N/A'}
+                        </span>
+                      </div>
+
+                      <div>
+                        <span className="text-[10px] text-zinc-500 block">Execution Processing</span>
+                        <span className="text-zinc-300 font-semibold mt-1 block">
+                          {exit.executionProcessingMs !== null && exit.executionProcessingMs !== undefined ? `${exit.executionProcessingMs} ms` : 'N/A'}
+                        </span>
+                      </div>
+
+                      <div>
+                        <span className="text-[10px] text-zinc-500 block">Dealer/Bridge Response Time</span>
+                        <span className="text-zinc-300 font-semibold mt-1 block">
+                          {exit.dealerBridgeResponseTimeMs !== null && exit.dealerBridgeResponseTimeMs !== undefined ? `${exit.dealerBridgeResponseTimeMs} ms` : 'N/A'}
+                        </span>
+                      </div>
+
+                      {exit.pendingWaitingTimeMs !== null && exit.pendingWaitingTimeMs !== undefined && (
+                        <div>
+                          <span className="text-[10px] text-zinc-500 block">Pending Waiting Time</span>
+                          <span className="text-zinc-300 font-semibold mt-1 block">
+                            {exit.pendingWaitingTimeMs} ms
+                          </span>
+                        </div>
+                      )}
                     </div>
                   ) : (
                     <div className="py-8 text-center text-zinc-500 italic text-xs">
@@ -746,30 +816,37 @@ export default function InvestigationWorkspacePage() {
                     </div>
 
                     <div className="bg-zinc-950/20 border border-zinc-900/50 rounded-lg p-4">
-                      <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Cumulative Execution Latency</span>
+                      <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Cumulative Execution Time</span>
                       <span className="text-xl font-bold text-zinc-100 mt-1 block font-mono">
                         {summary.cumulativeLatency !== undefined && summary.cumulativeLatency !== null 
                           ? `${summary.cumulativeLatency.toFixed(0)} ms` 
-                          : `${summary.cumulativeLatencyMs || 0} ms`}
+                          : 'N/A'}
                       </span>
                       <div className="text-[9px] text-zinc-500 space-y-0.5 mt-2 pt-2 border-t border-zinc-900/50">
-                        <div>Entry Latency: {summary.entryLatency !== null && summary.entryLatency !== undefined ? `${summary.entryLatency.toFixed(0)} ms` : 'N/A'}</div>
-                        {summary.exitExecution && (
-                          <div>Exit Latency: {summary.exitLatency !== null && summary.exitLatency !== undefined ? `${summary.exitLatency.toFixed(0)} ms` : 'N/A'}</div>
+                        <div>Entry Time: {entry.totalObservableExecutionTimeMs !== null && entry.totalObservableExecutionTimeMs !== undefined ? `${entry.totalObservableExecutionTimeMs.toFixed(0)} ms` : 'N/A'}</div>
+                        {exit && (
+                          <div>Exit Time: {exit.totalObservableExecutionTimeMs !== null && exit.totalObservableExecutionTimeMs !== undefined ? `${exit.totalObservableExecutionTimeMs.toFixed(0)} ms` : 'N/A'}</div>
                         )}
                       </div>
                     </div>
 
                     <div className="bg-zinc-950/20 border border-zinc-900/50 rounded-lg p-4">
-                      <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Average Execution Latency</span>
-                      <span className="text-xl font-bold text-zinc-300 mt-1 block font-mono">
-                        {summary.averageLatency !== undefined && summary.averageLatency !== null 
-                          ? `${summary.averageLatency.toFixed(0)} ms` 
-                          : `${(exit ? ((entry.executionLatencyMs + exit.executionLatencyMs) / 2) : entry.executionLatencyMs).toFixed(0)} ms`}
-                      </span>
-                      <span className="text-[9px] text-zinc-500 block mt-1">
-                        Mean execution processing delay
-                      </span>
+                      <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Trade & Execution Details</span>
+                      <div className="text-[10px] text-zinc-300 space-y-1.5 mt-2 font-mono">
+                        <div>Hold Time: <span className="font-semibold text-zinc-100">{(() => {
+                          const ms = summary.holdTimeMs;
+                          if (ms === null || ms === undefined) return 'N/A';
+                          if (ms < 1000) return `${ms} ms`;
+                          const sec = ms / 1000;
+                          if (sec < 60) return `${sec.toFixed(1)}s`;
+                          const min = sec / 60;
+                          if (min < 60) return `${min.toFixed(1)}m`;
+                          const hrs = min / 60;
+                          return `${hrs.toFixed(1)}h`;
+                        })()}</span></div>
+                        <div>Reason: <span className="font-semibold text-zinc-100">{entry.executionReason || 'MARKET'}</span></div>
+                        <div>Type: <span className="font-semibold text-zinc-100">{entry.orderType || 'MARKET'}</span></div>
+                      </div>
                     </div>
                   </div>
                 </div>
@@ -824,9 +901,20 @@ export default function InvestigationWorkspacePage() {
           <div className="grid gap-8 lg:grid-cols-12 h-full items-start max-w-6xl">
             {/* AI Report Card */}
             <div className="lg:col-span-7 rounded-xl border border-zinc-900 bg-zinc-900/10 p-6 space-y-5">
-              <div className="flex items-center gap-2 border-b border-zinc-900 pb-3">
-                <FileText className="h-4.5 w-4.5 text-zinc-400" />
-                <h3 className="text-sm font-semibold tracking-tight text-zinc-200">AI Incident Investigation Report</h3>
+              <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
+                <div className="flex items-center gap-2">
+                  <FileText className="h-4.5 w-4.5 text-zinc-400" />
+                  <h3 className="text-sm font-semibold tracking-tight text-zinc-200">AI Incident Investigation Report</h3>
+                </div>
+                {latestAiReport && (
+                  <button
+                    onClick={() => analyzeMutation.mutate()}
+                    disabled={analyzeMutation.isPending}
+                    className="rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-1.5 text-[10px] font-semibold text-zinc-300 hover:text-zinc-150 hover:bg-zinc-850 active:bg-zinc-900 transition"
+                  >
+                    {analyzeMutation.isPending ? 'Regenerating...' : 'Regenerate'}
+                  </button>
+                )}
               </div>
 
               {latestAiReport ? (

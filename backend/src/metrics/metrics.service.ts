@@ -2,23 +2,27 @@ import { Injectable, Logger } from '@nestjs/common';
 import { CorrelatedIncident } from '../journal/correlation.engine';
 
 export interface CalculatedMetrics {
-  executionLatencyMs: number | null;
-  rejectionLatencyMs: number | null;
-  dealerLatencyMs: number;
-  slippagePips: number | null;
-  priceDelta: number;
-  requoteCount: number;
-  retryCount: number;
-  dealerId: string | null;
-  hasRequote: boolean;
-  isNormal: boolean;
-  digits: number | null;
-  pointSize: number | null;
+  totalObservableExecutionTimeMs: number | null;
+  routingDelayMs: number | null;
+  executionRequestDelayMs: number | null;
+  executionProcessingMs: number | null;
+  dealerBridgeResponseTimeMs: number | null;
+  pendingWaitingTimeMs: number | null;
+  holdTimeMs: number | null;
+  
   slippagePoints: number | null;
   slippageType: 'Adverse' | 'Favorable' | 'Zero' | 'N/A';
-  reason: string | null;
+  executionReason: 'MARKET' | 'PENDING_ORDER' | 'STOP_LOSS' | 'TAKE_PROFIT' | 'MANUAL_CLOSE' | 'PARTIAL_CLOSE' | 'OTHER';
+  orderType: 'MARKET' | 'BUY_LIMIT' | 'SELL_LIMIT' | 'BUY_STOP' | 'SELL_STOP' | 'BUY_STOP_LIMIT' | 'SELL_STOP_LIMIT';
+  status: 'EXECUTED' | 'REJECTED' | 'CANCELLED' | 'INCOMPLETE' | 'UNKNOWN' | 'PARTIAL';
+  executed: boolean;
+  isNormal: boolean;
+  priceDelta: number;
+  digits: number | null;
+  pointSize: number | null;
   priceRequested?: number;
   priceExecuted?: number | null;
+  
   rejection?: {
     isRejected: boolean;
     reason: string | null;
@@ -27,8 +31,6 @@ export interface CalculatedMetrics {
     failedStage: string | null;
     lastSuccessfulStage: string | null;
   };
-  status: 'EXECUTED' | 'REJECTED' | 'INCOMPLETE' | 'UNKNOWN' | 'PARTIAL';
-  executed: boolean;
 }
 
 @Injectable()
@@ -42,66 +44,121 @@ export class MetricsService {
   ): CalculatedMetrics {
     const { events, symbol, action } = incident;
 
-    // 1. Find key timestamps for latency checks
-    const submitEvent = events.find((e) => e.eventType === 'ORDER_SUBMITTED');
-    const routeEvent = events.find((e) => e.eventType === 'ORDER_ROUTED');
-    const dealerAcceptEvent = events.find((e) => e.eventType === 'DEALER_ACCEPTED');
-    const execEvent = events.find((e) => e.eventType === 'ORDER_EXECUTED');
-    const rejectEvent = events.find((e) => e.eventType === 'ORDER_REJECTED' || e.eventType === 'DEALER_REJECTED');
+    // Find lifecycle events
+    const requestEvent = events.find((e) => e.eventType === 'REQUEST');
+    const routeEvent = events.find((e) => e.eventType === 'ROUTED');
+    const execReqEvent = events.find((e) => e.eventType === 'EXECUTION_REQUEST');
+    const execResEvent = events.find((e) => e.eventType === 'EXECUTION_RESPONSE');
+    const dealExecEvent = events.find((e) => e.eventType === 'DEAL_EXECUTED' || e.eventType === 'ORDER_FILLED');
+    const orderPlacedEvent = events.find((e) => e.eventType === 'ORDER_PLACED');
+    const orderTriggeredEvent = events.find((e) => e.eventType === 'ORDER_TRIGGERED');
+    const rejectEvent = events.find((e) => e.eventType === 'ORDER_REJECTED');
+    const cancelEvent = events.find((e) => e.eventType === 'ORDER_CANCELLED');
 
-    const hasExecution = !!execEvent;
+    const hasExecution = !!dealExecEvent;
     const hasRejection = !!rejectEvent;
+    const hasCancellation = !!cancelEvent;
 
-    // Strict status mapping
-    let status: 'EXECUTED' | 'REJECTED' | 'INCOMPLETE' | 'UNKNOWN' = 'UNKNOWN';
+    // Determine status
+    let status: 'EXECUTED' | 'REJECTED' | 'CANCELLED' | 'INCOMPLETE' | 'UNKNOWN' = 'UNKNOWN';
     let executed = false;
+
     if (hasExecution) {
       status = 'EXECUTED';
       executed = true;
     } else if (hasRejection) {
       status = 'REJECTED';
-      executed = false;
-    } else if (submitEvent) {
+    } else if (hasCancellation) {
+      status = 'CANCELLED';
+    } else if (requestEvent || orderPlacedEvent) {
       status = 'INCOMPLETE';
-      executed = false;
     }
 
-    // Execution latency: total time between client click (submitted) and deal executed
-    let executionLatencyMs: number | null = null;
-    if (submitEvent && execEvent) {
-      executionLatencyMs =
-        new Date(execEvent.timestamp).getTime() - new Date(submitEvent.timestamp).getTime();
-      if (executionLatencyMs < 0) executionLatencyMs = 0;
+    // Chronology Validation
+    let chronologyError = false;
+    const checkOrder = (t1: string, t2: string) => new Date(t1).getTime() <= new Date(t2).getTime();
+
+    if (requestEvent && routeEvent && !checkOrder(requestEvent.timestamp, routeEvent.timestamp)) chronologyError = true;
+    if (routeEvent && execReqEvent && !checkOrder(routeEvent.timestamp, execReqEvent.timestamp)) chronologyError = true;
+    if (execReqEvent && execResEvent && !checkOrder(execReqEvent.timestamp, execResEvent.timestamp)) chronologyError = true;
+    if (execReqEvent && dealExecEvent && !checkOrder(execReqEvent.timestamp, dealExecEvent.timestamp)) chronologyError = true;
+
+    // Determine starting timestamp for latency
+    // For pending orders, execution latency starts when order is triggered
+    const startEvent = orderTriggeredEvent || requestEvent;
+
+    let totalObservableExecutionTimeMs: number | null = null;
+    let routingDelayMs: number | null = null;
+    let executionRequestDelayMs: number | null = null;
+    let executionProcessingMs: number | null = null;
+    let dealerBridgeResponseTimeMs: number | null = null;
+    let pendingWaitingTimeMs: number | null = null;
+
+    if (!chronologyError) {
+      if (startEvent && dealExecEvent) {
+        totalObservableExecutionTimeMs = new Date(dealExecEvent.timestamp).getTime() - new Date(startEvent.timestamp).getTime();
+        if (totalObservableExecutionTimeMs < 0) totalObservableExecutionTimeMs = 0;
+      }
+
+      if (requestEvent && routeEvent) {
+        routingDelayMs = new Date(routeEvent.timestamp).getTime() - new Date(requestEvent.timestamp).getTime();
+        if (routingDelayMs < 0) routingDelayMs = 0;
+      }
+
+      if (routeEvent && execReqEvent) {
+        executionRequestDelayMs = new Date(execReqEvent.timestamp).getTime() - new Date(routeEvent.timestamp).getTime();
+        if (executionRequestDelayMs < 0) executionRequestDelayMs = 0;
+      }
+
+      if (execReqEvent && dealExecEvent) {
+        executionProcessingMs = new Date(dealExecEvent.timestamp).getTime() - new Date(execReqEvent.timestamp).getTime();
+        if (executionProcessingMs < 0) executionProcessingMs = 0;
+      }
+
+      if (execReqEvent && execResEvent) {
+        dealerBridgeResponseTimeMs = new Date(execResEvent.timestamp).getTime() - new Date(execReqEvent.timestamp).getTime();
+        if (dealerBridgeResponseTimeMs < 0) dealerBridgeResponseTimeMs = 0;
+      }
+
+      if (orderPlacedEvent && orderTriggeredEvent) {
+        pendingWaitingTimeMs = new Date(orderTriggeredEvent.timestamp).getTime() - new Date(orderPlacedEvent.timestamp).getTime();
+        if (pendingWaitingTimeMs < 0) pendingWaitingTimeMs = 0;
+      }
     }
 
-    // Rejection latency: time between client request and rejection event
-    let rejectionLatencyMs: number | null = null;
-    if (submitEvent && rejectEvent) {
-      rejectionLatencyMs =
-        new Date(rejectEvent.timestamp).getTime() - new Date(submitEvent.timestamp).getTime();
-      if (rejectionLatencyMs < 0) rejectionLatencyMs = 0;
+    // Determine execution reason
+    let executionReason: CalculatedMetrics['executionReason'] = 'MARKET';
+    let rawLogsText = events.map((e) => e.rawMessage.toLowerCase()).join(' ');
+
+    if (rawLogsText.includes('stop loss') || rawLogsText.includes('[sl]') || rawLogsText.includes('s/l')) {
+      executionReason = 'STOP_LOSS';
+    } else if (rawLogsText.includes('take profit') || rawLogsText.includes('[tp]') || rawLogsText.includes('t/p')) {
+      executionReason = 'TAKE_PROFIT';
+    } else if (orderTriggeredEvent || orderPlacedEvent) {
+      executionReason = 'PENDING_ORDER';
+    } else if (rawLogsText.includes('close') || rawLogsText.includes('close #')) {
+      executionReason = 'MANUAL_CLOSE';
     }
 
-    // Dealer latency: time request spent waiting in manual dealer terminal queue
-    let dealerLatencyMs = 0;
-    if (routeEvent && dealerAcceptEvent) {
-      dealerLatencyMs =
-        new Date(dealerAcceptEvent.timestamp).getTime() - new Date(routeEvent.timestamp).getTime();
-    }
+    // Determine orderType
+    let orderType: CalculatedMetrics['orderType'] = 'MARKET';
+    if (rawLogsText.includes('buy limit')) orderType = 'BUY_LIMIT';
+    else if (rawLogsText.includes('sell limit')) orderType = 'SELL_LIMIT';
+    else if (rawLogsText.includes('buy stop limit')) orderType = 'BUY_STOP_LIMIT';
+    else if (rawLogsText.includes('sell stop limit')) orderType = 'SELL_STOP_LIMIT';
+    else if (rawLogsText.includes('buy stop')) orderType = 'BUY_STOP';
+    else if (rawLogsText.includes('sell stop')) orderType = 'SELL_STOP';
 
-    // 2. Calculate Slippage
+    // Slippage
     let priceDelta = 0;
     let slippagePoints: number | null = null;
-    let slippagePips: number | null = null;
     let slippageType: 'Adverse' | 'Favorable' | 'Zero' | 'N/A' = 'N/A';
-    
-    // Find initial request price (from submit) and final execution price (from executed)
-    const initialPrice = submitEvent?.metadata?.priceRequested;
-    const finalPrice = execEvent?.metadata?.priceExecuted;
+
+    const initialPrice = requestEvent?.metadata?.priceRequested || orderPlacedEvent?.metadata?.priceRequested;
+    const finalPrice = dealExecEvent?.metadata?.priceExecuted;
 
     if (hasExecution && initialPrice !== undefined && finalPrice !== undefined && initialPrice !== null && finalPrice !== null) {
       priceDelta = finalPrice - initialPrice;
-
       const pointSize = point ?? (digits !== null ? Math.pow(10, -digits) : null);
       if (pointSize !== null && pointSize > 0) {
         slippagePoints = Math.abs(priceDelta) / pointSize;
@@ -115,160 +172,80 @@ export class MetricsService {
       } else {
         slippageType = priceDelta < 0 ? 'Adverse' : 'Favorable';
       }
-
-      const legacyPips = this.convertToPips(symbol, action === 'BUY' ? priceDelta : -priceDelta);
-      slippagePips = slippagePoints !== null ? parseFloat(slippagePoints.toFixed(1)) : parseFloat(legacyPips.toFixed(1));
-    } else {
-      priceDelta = 0;
-      slippagePoints = null;
-      slippagePips = null;
-      slippageType = 'N/A';
     }
-
-    // 3. Requote calculations
-    const requoteEvents = events.filter((e) => e.eventType === 'DEALER_REQUOTED');
-    const requoteCount = requoteEvents.length;
-    const hasRequote = requoteCount > 0;
-
-    // Retries count (how many times request was submitted due to requotes or server rejections)
-    const submitCount = events.filter((e) => e.eventType === 'ORDER_SUBMITTED').length;
-    const retryCount = Math.max(0, submitCount - 1);
-
-    // Extract dealer identifier
-    const dealerId = dealerAcceptEvent?.metadata?.dealerId || 
-                     requoteEvents[0]?.metadata?.dealerId || 
-                     null;
-
-    // Categorize execution status: Normal if low latency, low slippage, and zero requotes
-    const isNormal = executed && (executionLatencyMs !== null && executionLatencyMs < 300) && (slippagePips !== null && slippagePips <= 1.0) && !hasRequote;
 
     // Rejection analysis
     let rejection = undefined;
     if (hasRejection) {
       const rawReason = rejectEvent.metadata.rawReason || '';
-      let reason = 'Unknown rejection reason';
-      let rejectedBy = 'Unknown';
-      let failedStage = 'Unknown';
-      let lastSuccessfulStage = 'Unknown';
-
-      if (rejectEvent.eventType === 'ORDER_REJECTED') {
-        const lowerReason = rawReason.toLowerCase();
-        if (lowerReason.includes('not enough money') || lowerReason.includes('margin')) {
-          reason = 'Insufficient margin';
-          rejectedBy = 'MT5 Server (Margin Validation)';
-          failedStage = 'Server Validation';
-          lastSuccessfulStage = 'Client Request';
-        } else if (lowerReason.includes('market closed')) {
-          reason = 'Market closed';
-          rejectedBy = 'MT5 Server';
-          failedStage = 'Server Validation';
-          lastSuccessfulStage = 'Client Request';
-        } else if (lowerReason.includes('invalid volume')) {
-          reason = 'Invalid volume';
-          rejectedBy = 'MT5 Server (Trading Rules)';
-          failedStage = 'Server Validation';
-          lastSuccessfulStage = 'Client Request';
-        } else {
-          reason = rawReason || 'Request rejected';
-          rejectedBy = 'MT5 Server';
-          failedStage = 'Server Validation';
-          lastSuccessfulStage = 'Client Request';
-        }
-      } else if (rejectEvent.eventType === 'DEALER_REJECTED') {
-        reason = 'Dealer rejection';
-        rejectedBy = `Dealer #${rejectEvent.metadata.dealerId || 'Desk'}`;
-        failedStage = 'Dealer Desk';
-        
-        const hasRoute = events.some(e => e.eventType === 'ORDER_ROUTED');
-        lastSuccessfulStage = hasRoute ? 'Routing' : 'Server Validation';
-      }
-
       rejection = {
         isRejected: true,
-        reason,
+        reason: rawReason || 'Request rejected',
         rawReason: rawReason || null,
-        rejectedBy,
-        failedStage,
-        lastSuccessfulStage,
+        rejectedBy: rejectEvent.metadata.dealerId || 'MT5 Server',
+        failedStage: 'Execution Request',
+        lastSuccessfulStage: routeEvent ? 'Routing' : 'Client Request',
       };
     }
 
+    const pointSize = point ?? (digits !== null ? Math.pow(10, -digits) : null);
+
     return {
-      executionLatencyMs,
-      rejectionLatencyMs,
-      dealerLatencyMs,
-      slippagePips,
-      priceDelta: parseFloat(priceDelta.toFixed(5)),
-      requoteCount,
-      retryCount,
-      dealerId,
-      hasRequote,
-      isNormal,
-      // New dynamic slippage analysis fields
-      digits,
-      pointSize: point ?? (digits !== null ? Math.pow(10, -digits) : null),
+      totalObservableExecutionTimeMs,
+      routingDelayMs,
+      executionRequestDelayMs,
+      executionProcessingMs,
+      dealerBridgeResponseTimeMs,
+      pendingWaitingTimeMs,
+      holdTimeMs: null, // Hold time is round-trip and filled in analyzeExecution
+
       slippagePoints: slippagePoints !== null ? parseFloat(slippagePoints.toFixed(1)) : null,
       slippageType,
-      reason: digits === null ? 'Symbol Digits/Point Size not available' : null,
+      executionReason,
+      orderType,
+      status,
+      executed,
+      isNormal: executed && (totalObservableExecutionTimeMs !== null && totalObservableExecutionTimeMs < 300) && slippageType !== 'Adverse',
+      priceDelta: parseFloat(priceDelta.toFixed(5)),
+      digits,
+      pointSize,
       priceRequested: initialPrice,
       priceExecuted: hasExecution ? finalPrice : null,
       rejection,
-      status,
-      executed,
     };
   }
 
-  // Convert raw price changes to standard pips based on symbol characteristics
-  private convertToPips(symbol: string, rawDelta: number): number {
-    const symbolUpper = symbol.toUpperCase();
-
-    // 1. JPY currency pairs (typically 3 decimal digits, 1 pip = 0.01)
-    if (symbolUpper.includes('JPY')) {
-      return rawDelta / 0.01;
-    }
-
-    // 2. Gold (XAUUSD, typically 2 decimal digits, 1 pip = 0.10)
-    if (symbolUpper.includes('XAU') || symbolUpper.includes('GOLD')) {
-      return rawDelta / 0.10;
-    }
-
-    // 3. Silver / other commodities (typically 1 pip = 0.01)
-    if (symbolUpper.includes('XAG')) {
-      return rawDelta / 0.01;
-    }
-
-    // 4. Major currency pairs (typically 5 decimal digits, 1 pip = 0.00010)
-    return rawDelta / 0.0001;
-  }
-
-  // Shared execution analysis method for Trade Explorer and Investigate views
   analyzeExecution(entry: any, exit: any): any {
     const entryExecution = entry ? {
       priceRequested: entry.priceRequested ?? null,
       priceExecuted: entry.priceExecuted ?? null,
       slippagePoints: entry.slippagePoints !== undefined ? entry.slippagePoints : null,
       slippageType: entry.slippageType || 'Zero',
-      latencyMs: entry.executionLatencyMs !== undefined && entry.executionLatencyMs !== null 
-        ? entry.executionLatencyMs 
-        : (entry.latencyMs ?? null),
+      totalObservableExecutionTimeMs: entry.totalObservableExecutionTimeMs ?? null,
+      routingDelayMs: entry.routingDelayMs ?? null,
+      executionRequestDelayMs: entry.executionRequestDelayMs ?? null,
+      executionProcessingMs: entry.executionProcessingMs ?? null,
+      dealerBridgeResponseTimeMs: entry.dealerBridgeResponseTimeMs ?? null,
+      pendingWaitingTimeMs: entry.pendingWaitingTimeMs ?? null,
     } : null;
 
     const exitExecution = exit ? {
       priceRequested: exit.priceRequested ?? null,
-      priceExecuted: exit.priceExecuted ?? null,
+      priceExecuted: exit.exit?.priceExecuted ?? exit.priceExecuted ?? null,
       slippagePoints: exit.slippagePoints !== undefined ? exit.slippagePoints : null,
       slippageType: exit.slippageType || 'Zero',
-      latencyMs: exit.executionLatencyMs !== undefined && exit.executionLatencyMs !== null 
-        ? exit.executionLatencyMs 
-        : (exit.latencyMs ?? null),
+      totalObservableExecutionTimeMs: exit.totalObservableExecutionTimeMs ?? null,
+      routingDelayMs: exit.routingDelayMs ?? null,
+      executionRequestDelayMs: exit.executionRequestDelayMs ?? null,
+      executionProcessingMs: exit.executionProcessingMs ?? null,
+      dealerBridgeResponseTimeMs: exit.dealerBridgeResponseTimeMs ?? null,
+      pendingWaitingTimeMs: exit.pendingWaitingTimeMs ?? null,
     } : null;
 
-    // Calculate signed slippages (Adverse is positive cost, Favorable is negative cost/savings)
+    // Calculate signed slippages
     const getSignedSlippage = (exec: any) => {
       if (!exec || exec.slippagePoints === null || exec.slippagePoints === undefined) return 0;
-      if (exec.slippageType === 'Adverse') return exec.slippagePoints;
-      if (exec.slippageType === 'Favorable') return -exec.slippagePoints;
-      return 0;
+      return exec.slippageType === 'Adverse' ? exec.slippagePoints : (exec.slippageType === 'Favorable' ? -exec.slippagePoints : 0);
     };
 
     const entrySigned = getSignedSlippage(entryExecution);
@@ -277,7 +254,7 @@ export class MetricsService {
 
     let netSlippagePoints = Math.abs(netSigned);
     let netSlippageType: 'Adverse' | 'Favorable' | 'Zero' | 'N/A' = 'Zero';
-    
+
     if (netSigned > 0.01) {
       netSlippageType = 'Adverse';
     } else if (netSigned < -0.01) {
@@ -291,37 +268,45 @@ export class MetricsService {
       netSlippagePoints = 0;
     }
 
-    const netSlippage = {
-      slippagePoints: parseFloat(netSlippagePoints.toFixed(1)),
-      slippageType: netSlippageType,
-    };
+    // Cumulative & average execution latency (totalObservableExecutionTimeMs)
+    const entryLat = entryExecution?.totalObservableExecutionTimeMs ?? null;
+    const exitLat = exitExecution?.totalObservableExecutionTimeMs ?? null;
+    let cumulativeLatency = null;
+    let averageLatency = null;
 
-    const grossAdverseSlippage = (entryExecution?.slippageType === 'Adverse' ? (entryExecution.slippagePoints ?? 0) : 0) +
-                                 (exitExecution?.slippageType === 'Adverse' ? (exitExecution.slippagePoints ?? 0) : 0);
+    if (entryLat !== null && exitLat !== null) {
+      cumulativeLatency = entryLat + exitLat;
+      averageLatency = cumulativeLatency / 2;
+    } else if (entryLat !== null) {
+      cumulativeLatency = entryLat;
+      averageLatency = entryLat;
+    } else if (exitLat !== null) {
+      cumulativeLatency = exitLat;
+      averageLatency = exitLat;
+    }
 
-    const grossFavorableSlippage = (entryExecution?.slippageType === 'Favorable' ? (entryExecution.slippagePoints ?? 0) : 0) +
-                                   (exitExecution?.slippageType === 'Favorable' ? (exitExecution.slippagePoints ?? 0) : 0);
-
-    // Latency calculations independently
-    const entryLatency = entryExecution?.latencyMs ?? null;
-    const exitLatency = exitExecution?.latencyMs ?? null;
-    const cumulativeLatency = (entryLatency ?? 0) + (exitLatency ?? 0);
-    
-    let divisor = 0;
-    if (entryLatency !== null) divisor++;
-    if (exitLatency !== null) divisor++;
-    const averageLatency = divisor > 0 ? cumulativeLatency / divisor : null;
+    // Hold time = Exit Execution Deal - Entry Execution Deal
+    let holdTimeMs = null;
+    if (entry?.priceExecuted && exit?.priceExecuted) {
+      // Find the execution timestamps
+      const entryTime = entry.timestamp;
+      const exitTime = exit.timestamp;
+      if (entryTime && exitTime) {
+        holdTimeMs = new Date(exitTime).getTime() - new Date(entryTime).getTime();
+        if (holdTimeMs < 0) holdTimeMs = 0;
+      }
+    }
 
     return {
       entryExecution,
       exitExecution,
-      netSlippage,
-      grossAdverseSlippage: parseFloat(grossAdverseSlippage.toFixed(1)),
-      grossFavorableSlippage: parseFloat(grossFavorableSlippage.toFixed(1)),
-      entryLatency,
-      exitLatency,
-      cumulativeLatency: parseFloat(cumulativeLatency.toFixed(1)),
+      netSlippage: {
+        slippagePoints: parseFloat(netSlippagePoints.toFixed(1)),
+        slippageType: netSlippageType,
+      },
+      cumulativeLatency: cumulativeLatency !== null ? parseFloat(cumulativeLatency.toFixed(1)) : null,
       averageLatency: averageLatency !== null ? parseFloat(averageLatency.toFixed(1)) : null,
+      holdTimeMs,
     };
   }
 }

@@ -17,7 +17,7 @@ describe('NormalizationEngine', () => {
     const result = engine.normalize(raw);
 
     expect(result).not.toBeNull();
-    expect(result!.eventType).toBe('ORDER_SUBMITTED');
+    expect(result!.eventType).toBe('REQUEST');
     expect(result!.login).toBe('1001');
     expect(result!.metadata.symbol).toBe('EURUSD');
     expect(result!.metadata.action).toBe('BUY');
@@ -30,7 +30,7 @@ describe('NormalizationEngine', () => {
     const result = engine.normalize(raw);
 
     expect(result).not.toBeNull();
-    expect(result!.eventType).toBe('DEALER_ACCEPTED');
+    expect(result!.eventType).toBe('EXECUTION_REQUEST');
     expect(result!.metadata.dealerId).toBe('5');
     expect(result!.metadata.symbol).toBe('XAUUSD');
     expect(result!.metadata.action).toBe('BUY');
@@ -43,7 +43,7 @@ describe('NormalizationEngine', () => {
     const result = engine.normalize(raw);
 
     expect(result).not.toBeNull();
-    expect(result!.eventType).toBe('DEALER_REQUOTED');
+    expect(result!.eventType).toBe('EXECUTION_RESPONSE');
     expect(result!.metadata.dealerId).toBe('8');
     expect(result!.metadata.symbol).toBe('GBPUSD');
     expect(result!.metadata.priceRequested).toBe(1.28400);
@@ -55,7 +55,7 @@ describe('NormalizationEngine', () => {
     const result = engine.normalize(raw);
 
     expect(result).not.toBeNull();
-    expect(result!.eventType).toBe('ORDER_EXECUTED');
+    expect(result!.eventType).toBe('DEAL_EXECUTED');
     expect(result!.login).toBe('1001');
     expect(result!.metadata.ticket).toBe('5001');
     expect(result!.metadata.symbol).toBe('EURUSD');

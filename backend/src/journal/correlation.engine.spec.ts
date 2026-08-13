@@ -17,21 +17,21 @@ describe('CorrelationEngine', () => {
     const events: NormalizedEvent[] = [
       {
         timestamp: '2026-08-07T22:50:50.902Z',
-        eventType: 'ORDER_SUBMITTED',
+        eventType: 'REQUEST',
         rawMessage: 'order placed #670',
         login: '910102',
         metadata: { orderId: '670', symbol: 'XAUUSD.s', action: 'BUY', volume: 0.01, priceRequested: 4349.26 },
       },
       {
         timestamp: '2026-08-07T22:50:51.045Z',
-        eventType: 'ORDER_EXECUTED',
+        eventType: 'DEAL_EXECUTED',
         rawMessage: 'deal performed #712',
         login: '910102',
         metadata: { dealId: '712', symbol: 'XAUUSD.s', action: 'BUY', volume: 0.01, priceExecuted: 4349.36 },
       },
       {
         timestamp: '2026-08-07T22:50:51.045Z',
-        eventType: 'ORDER_EXECUTED',
+        eventType: 'EXECUTION_RESPONSE',
         rawMessage: 'order performed buy [#670]',
         login: '910102',
         metadata: { orderId: '670', symbol: 'XAUUSD.s', action: 'BUY', volume: 0.01, priceExecuted: 4349.36 },
@@ -43,28 +43,28 @@ describe('CorrelationEngine', () => {
     expect(result.length).toBe(1);
     expect(result[0].login).toBe('910102');
     expect(result[0].events.length).toBe(3); // submitted, deal performed, order performed
-    expect(result[0].events.find((e) => e.eventType === 'ORDER_SUBMITTED')?.metadata.orderId).toBe('670');
+    expect(result[0].events.find((e) => e.eventType === 'REQUEST')?.metadata.orderId).toBe('670');
   });
 
   it('should filter out duplicate executions and correlate them cleanly', () => {
     const events: NormalizedEvent[] = [
       {
         timestamp: '2026-08-07T22:50:55.365Z',
-        eventType: 'ORDER_SUBMITTED',
+        eventType: 'REQUEST',
         rawMessage: 'order placed #671',
         login: '910102',
         metadata: { orderId: '671', symbol: 'XAUUSD.s', action: 'SELL', volume: 0.01, priceRequested: 4349.01 },
       },
       {
         timestamp: '2026-08-07T22:50:55.538Z',
-        eventType: 'ORDER_EXECUTED',
+        eventType: 'DEAL_EXECUTED',
         rawMessage: 'deal performed #713',
         login: '910102',
         metadata: { dealId: '713', symbol: 'XAUUSD.s', action: 'SELL', volume: 0.01, priceExecuted: 4348.86 },
       },
       {
         timestamp: '2026-08-07T22:50:55.538Z',
-        eventType: 'ORDER_EXECUTED',
+        eventType: 'EXECUTION_RESPONSE',
         rawMessage: 'order performed sell [#671]',
         login: '910102',
         metadata: { orderId: '671', symbol: 'XAUUSD.s', action: 'SELL', volume: 0.01, priceExecuted: 4348.86 },
@@ -82,21 +82,21 @@ describe('CorrelationEngine', () => {
     const events: NormalizedEvent[] = [
       {
         timestamp: '2026-08-07T22:50:50.902Z',
-        eventType: 'ORDER_SUBMITTED',
+        eventType: 'REQUEST',
         rawMessage: 'buy request',
         login: '910102',
         metadata: { symbol: 'XAUUSD.s', action: 'BUY', volume: 0.01, priceRequested: 4349.26 },
       },
       {
         timestamp: '2026-08-07T22:50:55.365Z',
-        eventType: 'ORDER_SUBMITTED',
+        eventType: 'REQUEST',
         rawMessage: 'sell request',
         login: '910102',
         metadata: { symbol: 'XAUUSD.s', action: 'SELL', volume: 0.01, priceRequested: 4349.01 },
       },
       {
         timestamp: '2026-08-07T22:50:55.538Z',
-        eventType: 'ORDER_EXECUTED',
+        eventType: 'DEAL_EXECUTED',
         rawMessage: 'sell execution',
         login: '910102',
         metadata: { symbol: 'XAUUSD.s', action: 'SELL', volume: 0.01, priceExecuted: 4348.86 },
@@ -109,7 +109,7 @@ describe('CorrelationEngine', () => {
     // Since the buy request is BUY and sell execution is SELL, they must not match.
     const sellIncident = result.find((i) => i.action === 'SELL');
     expect(sellIncident).toBeDefined();
-    const submit = sellIncident?.events.find((e) => e.eventType === 'ORDER_SUBMITTED');
+    const submit = sellIncident?.events.find((e) => e.eventType === 'REQUEST');
     expect(submit?.rawMessage).toBe('sell request');
   });
 });
