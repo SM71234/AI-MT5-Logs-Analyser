@@ -1,7 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { Database, Plus, Trash2, ShieldAlert, Server, Network, User, Play, Square, Wifi, Check, AlertTriangle } from 'lucide-react';
+import { Database, Plus, Trash2, ShieldAlert, Server, Network, User, Wifi, Check, AlertTriangle, Play, Square } from 'lucide-react';
 
 interface Broker {
   id: string;
@@ -9,7 +9,7 @@ interface Broker {
   serverAddress: string;
   port: number;
   managerLogin: string;
-  status: 'CONNECTED' | 'DISCONNECTED';
+  status: 'ACTIVE' | 'UNVERIFIED';
   createdAt: string;
 }
 
@@ -132,12 +132,14 @@ export default function BrokersPage() {
         ...prev,
         [id]: { success: data.success, message: data.message },
       }));
+      queryClient.invalidateQueries({ queryKey: ['brokers'] });
     },
     onError: (err: any, id) => {
       setSavedTestResult((prev) => ({
         ...prev,
         [id]: { success: false, message: err.message },
       }));
+      queryClient.invalidateQueries({ queryKey: ['brokers'] });
     },
   });
 
@@ -382,7 +384,7 @@ export default function BrokersPage() {
       ) : brokers && brokers.length > 0 ? (
         <div className="grid gap-6 sm:grid-cols-2 lg:grid-cols-3">
           {brokers.map((broker) => {
-            const isConnected = broker.status === 'CONNECTED';
+            const isConnected = broker.status === 'ACTIVE';
             const testInfo = savedTestResult[broker.id];
 
             return (

@@ -42,6 +42,7 @@ interface InvestigationCase {
   user: { name: string };
   notes: Note[];
   aiReports: AiReport[];
+  recalculationFailed?: boolean;
 }
 
 export default function InvestigationWorkspacePage() {
@@ -212,6 +213,19 @@ export default function InvestigationWorkspacePage() {
           <span>Case Created: {new Date(caseFile.createdAt).toLocaleDateString()}</span>
         </div>
       </header>
+
+      {/* Recalculation Stale Warning Banner */}
+      {caseFile.recalculationFailed && (
+        <div className="mx-6 mt-4 p-4 rounded-xl border border-amber-950/60 bg-amber-950/15 text-amber-400 flex items-start gap-4">
+          <AlertTriangle className="h-5 w-5 shrink-0 mt-0.5" />
+          <div>
+            <h5 className="text-xs font-bold uppercase tracking-wider font-semibold">Warning: Recalculation Offline</h5>
+            <p className="text-xs text-zinc-400 mt-1 leading-relaxed">
+              The MT5 server connector is currently offline or unreachable. Dynamic log recalculation failed. Serving cached metrics from the database instead.
+            </p>
+          </div>
+        </div>
+      )}
 
       {/* Investigation Conclusion Banner */}
       {metrics?.canonicalResult && (
@@ -837,12 +851,16 @@ export default function InvestigationWorkspacePage() {
                           const ms = summary.holdTimeMs;
                           if (ms === null || ms === undefined) return 'N/A';
                           if (ms < 1000) return `${ms} ms`;
-                          const sec = ms / 1000;
-                          if (sec < 60) return `${sec.toFixed(1)}s`;
-                          const min = sec / 60;
-                          if (min < 60) return `${min.toFixed(1)}m`;
-                          const hrs = min / 60;
-                          return `${hrs.toFixed(1)}h`;
+                          const totalSec = Math.round(ms / 1000);
+                          if (totalSec < 60) return `${(ms / 1000).toFixed(1)}s`;
+                          const minutes = Math.floor(totalSec / 60);
+                          const seconds = totalSec % 60;
+                          if (minutes < 60) {
+                            return `${minutes}m ${seconds}s`;
+                          }
+                          const hours = Math.floor(minutes / 60);
+                          const remainingMinutes = minutes % 60;
+                          return `${hours}h ${remainingMinutes}m ${seconds}s`;
                         })()}</span></div>
                         <div>Reason: <span className="font-semibold text-zinc-100">{entry.executionReason || 'MARKET'}</span></div>
                         <div>Type: <span className="font-semibold text-zinc-100">{entry.orderType || 'MARKET'}</span></div>

@@ -156,7 +156,19 @@ describe('AiService', () => {
         },
       };
 
-      const report = service.generateDeterministicFallbackReport('1001', '659', 'BTCUSD.s', 'BUY', 0.1, metrics);
+      const context = {
+        login: '1001',
+        ticketId: '659',
+        symbol: 'BTCUSD.s',
+        action: 'BUY',
+        volume: 0.1,
+        entry: metrics,
+        exit: null,
+        summary: null,
+        events: [],
+      };
+
+      const report = service.generateDeterministicFallbackReport(context);
 
       expect(report).toContain('### Summary');
       expect(report).toContain('Trade request by Client #1001 for 0.1 Lot BTCUSD.s was rejected.');

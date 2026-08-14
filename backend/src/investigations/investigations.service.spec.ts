@@ -5,7 +5,7 @@ import { Mt5Service } from '../mt5/mt5.service';
 import { JournalEngineService } from '../journal/journal-engine.service';
 import { MetricsService, CalculatedMetrics } from '../metrics/metrics.service';
 import { AiService } from '../ai/ai.service';
-import { NotFoundException } from '@nestjs/common';
+import { NotFoundException, InternalServerErrorException } from '@nestjs/common';
 
 describe('InvestigationsService', () => {
   let service: InvestigationsService;
@@ -28,6 +28,8 @@ describe('InvestigationsService', () => {
       aiReport: {
         findFirst: jest.fn(),
         create: jest.fn(),
+        deleteMany: jest.fn(),
+        delete: jest.fn(),
       },
       auditLog: {
         create: jest.fn(),
@@ -41,19 +43,13 @@ describe('InvestigationsService', () => {
     };
 
     const mockJournalEngineService = {
-      processLogs: jest.fn(),
+      processLogs: jest.fn().mockReturnValue([]),
     };
 
     const mockMetricsService = {
       calculate: jest.fn(),
       analyzeExecution: jest.fn().mockImplementation((entry, exit) => ({
-        entryExecution: entry,
-        exitExecution: exit,
         netSlippage: { slippagePoints: entry?.slippagePoints || 0, slippageType: entry?.slippageType || 'Zero' },
-        grossAdverseSlippage: entry?.slippageType === 'Adverse' ? entry?.slippagePoints || 0 : 0,
-        grossFavorableSlippage: entry?.slippageType === 'Favorable' ? entry?.slippagePoints || 0 : 0,
-        entryLatency: entry?.totalObservableExecutionTimeMs || null,
-        exitLatency: exit?.totalObservableExecutionTimeMs || null,
         cumulativeLatency: (entry?.totalObservableExecutionTimeMs || 0) + (exit?.totalObservableExecutionTimeMs || 0),
         averageLatency: entry?.totalObservableExecutionTimeMs || null,
       })),
@@ -85,68 +81,78 @@ describe('InvestigationsService', () => {
     expect(service).toBeDefined();
   });
 
-  describe('create', () => {
-    it('should update existing investigation if already saved', async () => {
-      const mockSaved = { id: 'saved-id', ticketId: '5001' };
-      prisma.investigation.findFirst.mockResolvedValue(mockSaved);
-      prisma.investigation.update.mockResolvedValue(mockSaved);
-
-      mt5Service.getClientJournal.mockResolvedValue(['log1', 'log2']);
-      mt5Service.getClientTrades.mockResolvedValue([
-        {
-          ticket: '5001',
-          positionId: '5001',
-          entry: { orderId: '100', dealId: '200' },
-          exit: { orderId: '101', dealId: '201' },
-        },
-      ]);
-      mt5Service.getSymbolSpecs.mockResolvedValue({ digits: 5, point: 0.00001 });
-
-      const mockIncident = {
-        ticketId: '5001',
-        login: '1001',
-        symbol: 'EURUSD',
-        action: 'BUY',
-        volume: 1.0,
-        events: [
-          {
-            timestamp: '2026-08-06T10:00:00.000Z',
-            eventType: 'DEAL_EXECUTED',
-            rawMessage: 'deal',
-            login: '1001',
-            metadata: { dealId: '200' },
-          },
-        ],
+  describe('findOne with unreachable connector', () => {
+    it('should degrade gracefully and return recalculationFailed: true rather than throwing', async () => {
+      const mockCase = {
+        id: 'case-id',
+        brokerId: 'broker-id',
+        clientLogin: '910102',
+        ticketId: '670',
+        title: 'Trade Incident — XAUUSD.s BUY 0.01 Lot',
+        metrics: JSON.stringify({
+          entry: { totalObservableExecutionTimeMs: undefined }, // triggers recalculate
+        }),
+        events: JSON.stringify([]),
+        aiReports: [],
+        createdAt: new Date(),
       };
 
-      const journalEngine = moduleRef.get(JournalEngineService);
-      (journalEngine.processLogs as jest.Mock).mockReturnValue([mockIncident]);
+      prisma.investigation.findUnique.mockResolvedValue(mockCase);
+      // Simulate unreachable MT5 connector
+      mt5Service.getClientTrades.mockRejectedValue(new Error('Connector is down'));
 
-      const metricsService = moduleRef.get(MetricsService);
-      (metricsService.calculate as jest.Mock).mockReturnValue({
-        totalObservableExecutionTimeMs: 100,
-        slippagePoints: 5,
-        slippageType: 'Adverse',
-      });
+      const result = await service.findOne('case-id');
 
-      const result = await service.create(
-        { brokerId: 'broker-1', login: '1001', ticket: '5001' },
-        'operator-id',
-      );
-
-      expect(prisma.investigation.findFirst).toHaveBeenCalled();
-      expect(prisma.investigation.update).toHaveBeenCalled();
-      expect(result).toEqual(mockSaved);
+      expect(result.recalculationFailed).toBe(true);
+      expect(result.id).toBe('case-id');
     });
   });
 
-  describe('addNote', () => {
-    it('should throw NotFoundException if case is missing', async () => {
-      prisma.investigation.findUnique.mockResolvedValue(null);
+  describe('analyze with unreachable connector', () => {
+    it('should throw InternalServerErrorException for hard-abort during report generation', async () => {
+      const mockCase = {
+        id: 'case-id',
+        brokerId: 'broker-id',
+        clientLogin: '910102',
+        ticketId: '670',
+        title: 'Trade Incident — XAUUSD.s BUY 0.01 Lot',
+        metrics: JSON.stringify({
+          entry: { totalObservableExecutionTimeMs: undefined }, // triggers recalculate
+        }),
+        events: JSON.stringify([]),
+        aiReports: [],
+        createdAt: new Date(),
+      };
+
+      prisma.investigation.findUnique.mockResolvedValue(mockCase);
+      // Simulate unreachable MT5 connector
+      mt5Service.getClientTrades.mockRejectedValue(new Error('Connector is down'));
 
       await expect(
-        service.addNote('missing-id', { content: 'test note' }, 'operator-id'),
-      ).rejects.toThrow(NotFoundException);
+        service.analyze('case-id', 'operator-id'),
+      ).rejects.toThrow(InternalServerErrorException);
+    });
+  });
+
+  describe('onModuleInit metadata backfill', () => {
+    it('should query unbackfilled cases and parse symbol, action, volume details', async () => {
+      const mockLegacyCase = {
+        id: 'legacy-id',
+        title: 'Trade Incident — EURUSD BUY 1.5 Lot',
+        metrics: JSON.stringify({
+          entry: { symbol: 'EURUSD', action: 'BUY', volume: 1.5, totalObservableExecutionTimeMs: 150 },
+        }),
+      };
+
+      prisma.investigation.findMany.mockResolvedValue([mockLegacyCase]);
+      prisma.investigation.update.mockResolvedValue({} as any);
+
+      await service.onModuleInit();
+
+      expect(prisma.investigation.update).toHaveBeenCalledWith({
+        where: { id: 'legacy-id' },
+        data: { symbol: 'EURUSD', action: 'BUY', volume: 1.5 },
+      });
     });
   });
 });

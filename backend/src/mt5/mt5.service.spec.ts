@@ -81,7 +81,7 @@ describe('Mt5Service', () => {
 
       const result = await service.getClientProfile('broker-id', '1001', 'operator-id');
 
-      expect(brokersService.findOneWithCredentials).toHaveBeenCalledWith('broker-id', 'operator-id', undefined);
+      expect(brokersService.findOneWithCredentials).toHaveBeenCalledWith('broker-id', 'operator-id', undefined, false);
       expect(global.fetch).toHaveBeenCalledWith(
         'http://localhost:4500/api/v1/connector/users/1001',
         {

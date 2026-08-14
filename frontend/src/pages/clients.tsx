@@ -10,7 +10,7 @@ interface Broker {
   serverAddress: string;
   port: number;
   managerLogin: string;
-  status: 'CONNECTED' | 'DISCONNECTED';
+  status: 'ACTIVE' | 'UNVERIFIED';
 }
 
 interface ClientProfile {
@@ -297,13 +297,13 @@ export default function ClientsPage() {
   }, [trades, tradeSearch, tradeTypeTab, sortOrder]);
 
   const selectedBroker = brokers?.find((b) => b.id === selectedBrokerId);
-  const isBrokerOffline = selectedBroker ? selectedBroker.status !== 'CONNECTED' : false;
+  const isBrokerOffline = selectedBroker ? selectedBroker.status !== 'ACTIVE' : false;
 
   // Clear query if the active broker goes offline or is disconnected
   React.useEffect(() => {
     if (activeQuery && brokers) {
       const activeBroker = brokers.find((b) => b.id === activeQuery.brokerId);
-      if (!activeBroker || activeBroker.status !== 'CONNECTED') {
+      if (!activeBroker || activeBroker.status !== 'ACTIVE') {
         setActiveQuery(null);
       }
     }
@@ -355,13 +355,13 @@ export default function ClientsPage() {
               <option value="" className="bg-zinc-950">-- Choose MT5 Server --</option>
               {brokers?.map((b) => (
                 <option key={b.id} value={b.id} className="bg-zinc-950">
-                  {b.name} ({b.status === 'CONNECTED' ? '🟢 Online' : '⚪ Offline'})
+                  {b.name} ({b.status === 'ACTIVE' ? '🟢 Online' : '⚪ Offline'})
                 </option>
               ))}
             </select>
             {isBrokerOffline && (
               <p className="text-[10px] text-amber-500 font-semibold mt-1">
-                ⚠️ Selected broker is offline. Connect it in the Brokers tab.
+                ⚠️ Selected broker connection is unverified. Run Test Connection in the Brokers tab.
               </p>
             )}
           </div>
@@ -618,7 +618,7 @@ export default function ClientsPage() {
                     </thead>
                     <tbody className="divide-y divide-zinc-900/50">
                       {filteredTrades.map((trade) => {
-                        const latencyVal = trade.executionAnalysis?.averageLatency ?? trade.latencyMs ?? (trade.durationSeconds * 1000);
+                        const latencyVal = trade.executionAnalysis?.cumulativeLatency ?? trade.latencyMs ?? (trade.durationSeconds * 1000);
                         const hasHighLatency = latencyVal >= 300;
 
                         return (
@@ -672,11 +672,11 @@ export default function ClientsPage() {
                                   </span>
                                   {trade.executionAnalysis.exitExecution ? (
                                     <span className="text-[9px] text-zinc-500 font-normal">
-                                      Entry: {trade.executionAnalysis.entryExecution.slippagePoints}{trade.executionAnalysis.entryExecution.slippageType === 'Adverse' ? 'A' : trade.executionAnalysis.entryExecution.slippageType === 'Favorable' ? 'F' : 'Z'} | Exit: {trade.executionAnalysis.exitExecution.slippagePoints}{trade.executionAnalysis.exitExecution.slippageType === 'Adverse' ? 'A' : trade.executionAnalysis.exitExecution.slippageType === 'Favorable' ? 'F' : 'Z'}
+                                      Entry: {trade.executionAnalysis.entryExecution?.slippagePoints !== null && trade.executionAnalysis.entryExecution?.slippagePoints !== undefined ? `${trade.executionAnalysis.entryExecution.slippagePoints}${trade.executionAnalysis.entryExecution.slippageType === 'Adverse' ? 'A' : trade.executionAnalysis.entryExecution.slippageType === 'Favorable' ? 'F' : 'Z'}` : 'N/A'} | Exit: {trade.executionAnalysis.exitExecution?.slippagePoints !== null && trade.executionAnalysis.exitExecution?.slippagePoints !== undefined ? `${trade.executionAnalysis.exitExecution.slippagePoints}${trade.executionAnalysis.exitExecution.slippageType === 'Adverse' ? 'A' : trade.executionAnalysis.exitExecution.slippageType === 'Favorable' ? 'F' : 'Z'}` : 'N/A'}
                                     </span>
                                   ) : (
                                     <span className="text-[9px] text-zinc-500 font-normal">
-                                      Entry: {trade.executionAnalysis.entryExecution.slippagePoints}{trade.executionAnalysis.entryExecution.slippageType === 'Adverse' ? 'A' : trade.executionAnalysis.entryExecution.slippageType === 'Favorable' ? 'F' : 'Z'}
+                                      Entry: {trade.executionAnalysis.entryExecution?.slippagePoints !== null && trade.executionAnalysis.entryExecution?.slippagePoints !== undefined ? `${trade.executionAnalysis.entryExecution.slippagePoints}${trade.executionAnalysis.entryExecution.slippageType === 'Adverse' ? 'A' : trade.executionAnalysis.entryExecution.slippageType === 'Favorable' ? 'F' : 'Z'}` : 'N/A'}
                                     </span>
                                   )}
                                 </div>
@@ -714,18 +714,18 @@ export default function ClientsPage() {
                                 <div className="flex items-center justify-end gap-1.5">
                                   {hasHighLatency && <Clock className="h-3 w-3 text-red-500 animate-pulse" />}
                                   <span>
-                                    {trade.executionAnalysis?.averageLatency !== undefined && trade.executionAnalysis?.averageLatency !== null
-                                      ? `${trade.executionAnalysis.averageLatency.toFixed(0)} ms (avg)` 
+                                    {trade.executionAnalysis?.cumulativeLatency !== undefined && trade.executionAnalysis?.cumulativeLatency !== null
+                                      ? `${trade.executionAnalysis.cumulativeLatency.toFixed(0)} ms` 
                                       : `${(trade.latencyMs ?? trade.durationSeconds * 1000).toFixed(0)} ms`}
                                   </span>
                                 </div>
                                 {trade.executionAnalysis?.exitExecution ? (
                                   <span className="text-[9px] text-zinc-500 font-normal mt-0.5">
-                                    Open: {trade.executionAnalysis.entryLatency !== null ? `${trade.executionAnalysis.entryLatency.toFixed(0)} ms` : 'N/A'} | Close: {trade.executionAnalysis.exitLatency !== null ? `${trade.executionAnalysis.exitLatency.toFixed(0)} ms` : 'N/A'}
+                                    Open: {trade.executionAnalysis.entryExecution?.totalObservableExecutionTimeMs !== null && trade.executionAnalysis.entryExecution?.totalObservableExecutionTimeMs !== undefined ? `${trade.executionAnalysis.entryExecution.totalObservableExecutionTimeMs.toFixed(0)} ms` : 'N/A'} | Close: {trade.executionAnalysis.exitExecution?.totalObservableExecutionTimeMs !== null && trade.executionAnalysis.exitExecution?.totalObservableExecutionTimeMs !== undefined ? `${trade.executionAnalysis.exitExecution.totalObservableExecutionTimeMs.toFixed(0)} ms` : 'N/A'}
                                   </span>
                                 ) : (
                                   <span className="text-[9px] text-zinc-500 font-normal mt-0.5">
-                                    Open: {trade.executionAnalysis?.entryLatency !== null && trade.executionAnalysis?.entryLatency !== undefined ? `${trade.executionAnalysis.entryLatency.toFixed(0)} ms` : `${(trade.latencyMs ?? trade.durationSeconds * 1000).toFixed(0)} ms`}
+                                    Open: {trade.executionAnalysis?.entryExecution?.totalObservableExecutionTimeMs !== null && trade.executionAnalysis?.entryExecution?.totalObservableExecutionTimeMs !== undefined ? `${trade.executionAnalysis.entryExecution.totalObservableExecutionTimeMs.toFixed(0)} ms` : `${(trade.latencyMs ?? trade.durationSeconds * 1000).toFixed(0)} ms`}
                                   </span>
                                 )}
                               </div>

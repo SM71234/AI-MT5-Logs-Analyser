@@ -46,6 +46,9 @@ model Investigation {
   ticketId    String              @map("ticket_id")
   status      String              @default("OPEN") // OPEN, CLOSED, RESOLVED
   title       String
+  symbol      String?
+  action      String?
+  volume      Float?
   summary     String?
   metrics     String              // SQLite stores JSON as string under Prisma
   events      String              // SQLite stores JSON as string under Prisma

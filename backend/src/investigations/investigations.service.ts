@@ -1,17 +1,17 @@
-import { Injectable, NotFoundException, BadRequestException, Logger } from '@nestjs/common';
+import { Injectable, NotFoundException, BadRequestException, Logger, OnModuleInit, InternalServerErrorException } from '@nestjs/common';
 import { PrismaService } from '../prisma/prisma.service';
 import { Mt5Service } from '../mt5/mt5.service';
 import { JournalEngineService } from '../journal/journal-engine.service';
 import { MetricsService, CalculatedMetrics } from '../metrics/metrics.service';
 import { NormalizedEvent } from '../journal/normalization.engine';
-import { AiService } from '../ai/ai.service';
+import { AiService, AiAnalysisContext } from '../ai/ai.service';
 import { CreateInvestigationDto } from './dto/create-investigation.dto';
 import { CreateNoteDto } from './dto/create-note.dto';
 import { ChatFollowupDto } from './dto/chat-followup.dto';
 import { Investigation } from '@prisma/client';
 
 @Injectable()
-export class InvestigationsService {
+export class InvestigationsService implements OnModuleInit {
   private readonly logger = new Logger('InvestigationsService');
 
   constructor(
@@ -21,6 +21,61 @@ export class InvestigationsService {
     private readonly metricsService: MetricsService,
     private readonly aiService: AiService,
   ) {}
+
+  async onModuleInit() {
+    this.logger.log('Running one-time backfill for existing investigations...');
+    try {
+      const cases = await this.prisma.investigation.findMany({
+        where: {
+          OR: [
+            { symbol: null },
+            { action: null },
+            { volume: null }
+          ]
+        }
+      });
+      this.logger.log(`Found ${cases.length} investigations needing metadata backfill.`);
+      for (const c of cases) {
+        try {
+          let symbol = null;
+          let action = null;
+          let volume = null;
+          // Try parsing metrics.entry
+          try {
+            const parsed = JSON.parse(c.metrics);
+            symbol = parsed.entry?.symbol;
+            action = parsed.entry?.action;
+            volume = parsed.entry?.volume;
+          } catch {}
+          
+          // Fallback to parsing title (e.g. "Trade Incident — XAUUSD.s BUY 0.01 Lot")
+          if (!symbol || !action) {
+            const parts = c.title.split(' — ');
+            if (parts.length > 1) {
+              const tradeDetails = parts[1].split(' ');
+              if (tradeDetails.length >= 2) {
+                symbol = tradeDetails[0];
+                action = tradeDetails[1];
+                volume = parseFloat(tradeDetails[2]) || null;
+              }
+            }
+          }
+          
+          if (symbol && action) {
+            await this.prisma.investigation.update({
+              where: { id: c.id },
+              data: { symbol, action, volume },
+            });
+            this.logger.log(`Backfilled case ID ${c.id}: symbol=${symbol}, action=${action}, volume=${volume}`);
+          }
+        } catch (cErr: any) {
+          this.logger.warn(`Failed to backfill metadata for case ${c.id}: ${cErr.message}`);
+        }
+      }
+    } catch (err: any) {
+      this.logger.error(`Error during investigations backfill init: ${err.message}`);
+    }
+  }
 
   // Creates or retrieves a trade investigation case
   async create(dto: CreateInvestigationDto, operatorId: string, ipAddress?: string): Promise<Investigation> {
@@ -188,6 +243,9 @@ export class InvestigationsService {
            title,
            metrics: JSON.stringify(structuredMetrics),
            events: JSON.stringify(combinedEvents),
+           symbol: entryIncident.symbol || null,
+           action: entryIncident.action || null,
+           volume: entryIncident.volume || null,
          },
        });
      } else {
@@ -202,6 +260,9 @@ export class InvestigationsService {
            status: 'OPEN',
            metrics: JSON.stringify(structuredMetrics),
            events: JSON.stringify(combinedEvents),
+           symbol: entryIncident.symbol || null,
+           action: entryIncident.action || null,
+           volume: entryIncident.volume || null,
          },
        });
      }
@@ -232,16 +293,27 @@ export class InvestigationsService {
   }
 
   // Shared method to perform dynamic metrics self-healing & recalculation if needed
-  private async recalculateIfNeeded(caseFile: any): Promise<{ metrics: any; events: any }> {
-    let parsedMetrics = JSON.parse(caseFile.metrics);
-    const parsedEvents = JSON.parse(caseFile.events);
-
-    const isOldFormat = !parsedMetrics.entry || 
-                        parsedMetrics.entry.totalObservableExecutionTimeMs === undefined;
-                        
-    const needsCanonicalResult = !parsedMetrics.canonicalResult;
+  private async recalculateIfNeeded(caseFile: any, allowThrow = false): Promise<{ metrics: any; events: any; recalculationFailed?: boolean }> {
+    let parsedMetrics: any;
+    let parsedEvents: any;
+    try {
+      parsedMetrics = JSON.parse(caseFile.metrics);
+      parsedEvents = JSON.parse(caseFile.events);
+    } catch (e) {
+      this.logger.error(`Failed to parse cached metrics/events for case ${caseFile.id}`);
+      if (allowThrow) {
+        throw new InternalServerErrorException('Corrupt case data cached in database.');
+      }
+      return { metrics: null, events: [], recalculationFailed: true };
+    }
 
     const hasCorruptReport = (caseFile.aiReports || []).some((r: any) => r.response.includes('undefined'));
+    const isOldFormat = !parsedMetrics.entry || 
+                        parsedMetrics.entry.totalObservableExecutionTimeMs === undefined ||
+                        !parsedMetrics.entry.timestamp ||
+                        !parsedMetrics.summary ||
+                        parsedMetrics.summary.holdTimeMs === undefined;
+    const needsCanonicalResult = !parsedMetrics.canonicalResult;
 
     if (isOldFormat || needsCanonicalResult || hasCorruptReport) {
       try {
@@ -255,13 +327,75 @@ export class InvestigationsService {
         const rawLines = parsedEvents.map((e: any) => e.rawMessage);
         const correlated = this.journalEngineService.processLogs(rawLines);
         
-        // Find matching entry and exit incidents based on trade action names
-        const entryInc = correlated.find(c => c.action === (caseFile.title.includes('BUY') ? 'BUY' : 'SELL'));
-        const exitInc = correlated.find(c => c.action === (caseFile.title.includes('BUY') ? 'SELL' : 'BUY'));
+        // Fetch trades from connector to get entry/exit IDs
+        let targetTrade: any = null;
+        try {
+          const trades = await this.mt5Service.getClientTrades(
+            caseFile.brokerId,
+            caseFile.clientLogin,
+            'SYSTEM',
+            undefined,
+          );
+          if (trades && Array.isArray(trades)) {
+            targetTrade = trades.find((t: any) => {
+              return t.ticketId === caseFile.ticketId || 
+                     t.entry?.orderId === caseFile.ticketId || 
+                     t.entry?.dealId === caseFile.ticketId ||
+                     t.ticket === caseFile.ticketId;
+            });
+          }
+        } catch (fetchErr: any) {
+          this.logger.warn(`MT5 Connector fetch failed during recalculation for case ${caseFile.id}: ${fetchErr.message}`);
+          if (allowThrow) {
+            throw new InternalServerErrorException(`MT5 Connector is unreachable during recalculation: ${fetchErr.message}`);
+          }
+          return { metrics: parsedMetrics, events: parsedEvents, recalculationFailed: true };
+        }
+
+        let entryOrderId = targetTrade?.entry?.orderId;
+        let entryDealId = targetTrade?.entry?.dealId;
+        let exitOrderId = targetTrade?.exit?.orderId;
+        let exitDealId = targetTrade?.exit?.dealId;
+
+        // Correlate using the strongest identifiers
+        const entryInc = Array.isArray(correlated) ? correlated.find((incident) => {
+          return incident.events.some((e) => {
+            const orderId = e.metadata.orderId;
+            const dealId = e.metadata.dealId;
+            const ticket = e.metadata.ticket;
+            
+            return (entryOrderId && orderId === entryOrderId) || 
+                   (entryDealId && dealId === entryDealId) ||
+                   (ticket && (ticket === caseFile.ticketId || ticket === entryOrderId || ticket === entryDealId)) ||
+                   incident.ticketId === caseFile.ticketId;
+          });
+        }) : null;
+
+        const exitInc = (Array.isArray(correlated) && (exitOrderId || exitDealId)) ? correlated.find((incident) => {
+          return incident.events.some((e) => {
+            const orderId = e.metadata.orderId;
+            const dealId = e.metadata.dealId;
+            
+            return (exitOrderId && orderId === exitOrderId) || 
+                   (exitDealId && dealId === exitDealId) ||
+                   incident.ticketId === exitOrderId ||
+                   incident.ticketId === exitDealId;
+          });
+        }) || null : null;
         
         if (entryInc) {
-          const entryM = this.metricsService.calculate(entryInc, parsedMetrics.digits || parsedMetrics.entry?.digits, parsedMetrics.pointSize || parsedMetrics.entry?.pointSize);
-          const exitM = exitInc ? this.metricsService.calculate(exitInc, parsedMetrics.digits || parsedMetrics.entry?.digits, parsedMetrics.pointSize || parsedMetrics.entry?.pointSize) : null;
+          const entryM = this.metricsService.calculate(
+            entryInc,
+            parsedMetrics.digits || parsedMetrics.entry?.digits,
+            parsedMetrics.pointSize || parsedMetrics.entry?.pointSize
+          );
+          const exitM = exitInc 
+            ? this.metricsService.calculate(
+                exitInc,
+                parsedMetrics.digits || parsedMetrics.entry?.digits,
+                parsedMetrics.pointSize || parsedMetrics.entry?.pointSize
+              )
+            : null;
           
           const executionAnalysis = this.metricsService.analyzeExecution(entryM, exitM);
           
@@ -307,9 +441,15 @@ export class InvestigationsService {
           });
 
           return { metrics: parsedMetrics, events: combinedRecorrelatedEvents };
+        } else {
+          return { metrics: parsedMetrics, events: parsedEvents, recalculationFailed: true };
         }
-      } catch (err) {
-        this.logger.warn(`Failed to dynamically correct metrics for case ${caseFile.id}: ${err.message}`);
+      } catch (err: any) {
+        this.logger.error(`CRITICAL METRICS RECALCULATION FAILURE for Case ID ${caseFile.id}: ${err.message}`, err.stack);
+        if (allowThrow) {
+          throw new InternalServerErrorException(`Unable to process investigation case due to recalculation failure: ${err.message}`);
+        }
+        return { metrics: parsedMetrics, events: parsedEvents, recalculationFailed: true };
       }
     }
 
@@ -339,18 +479,23 @@ export class InvestigationsService {
       throw new NotFoundException(`Investigation case ID ${id} not found`);
     }
 
-    const { metrics, events } = await this.recalculateIfNeeded(caseFile);
+    const { metrics, events, recalculationFailed } = await this.recalculateIfNeeded(caseFile, false);
 
+    const parsedMetricsObj = JSON.parse(caseFile.metrics);
+    const isOldFormat = !parsedMetricsObj.entry || 
+                        parsedMetricsObj.entry.totalObservableExecutionTimeMs === undefined ||
+                        !parsedMetricsObj.entry.timestamp ||
+                        !parsedMetricsObj.summary ||
+                        parsedMetricsObj.summary.holdTimeMs === undefined;
+    const needsCanonicalResult = !parsedMetricsObj.canonicalResult;
     const hasCorruptReport = (caseFile.aiReports || []).some((r: any) => r.response.includes('undefined'));
-    const isOldFormat = !JSON.parse(caseFile.metrics).entry || 
-                        JSON.parse(caseFile.metrics).entry.totalObservableExecutionTimeMs === undefined;
-    const needsCanonicalResult = !JSON.parse(caseFile.metrics).canonicalResult;
 
     return {
       ...caseFile,
       aiReports: isOldFormat || needsCanonicalResult || hasCorruptReport ? [] : caseFile.aiReports,
       metrics,
       events,
+      recalculationFailed: !!recalculationFailed,
     };
   }
 
@@ -396,10 +541,10 @@ export class InvestigationsService {
       throw new NotFoundException(`Investigation case not found`);
     }
 
-    const { metrics, events } = await this.recalculateIfNeeded(caseFile);
+    const { metrics, events } = await this.recalculateIfNeeded(caseFile, true);
 
-    // 1. Generate prompt hash to verify cache hit
-    const promptHash = this.aiService.generatePromptHash(caseFile.ticketId, metrics.entry || metrics);
+    // 1. Generate prompt hash to verify cache hit (v2 hash scheme)
+    const promptHash = this.aiService.generatePromptHash(caseFile.ticketId, metrics.entry || null, metrics.exit || null);
 
     // Check if an AI report for this prompt state already exists in DB
     const cachedReport = await this.prisma.aiReport.findFirst({
@@ -417,15 +562,19 @@ export class InvestigationsService {
     }
 
     // 2. Perform AI completions
-    const reportText = await this.aiService.generateAnalysis(
-      caseFile.clientLogin,
-      caseFile.ticketId,
-      caseFile.title.includes('BUY') ? 'BUY' : 'SELL', // simplified for helper
-      caseFile.title.split(' — ')[1]?.split(' ')[0] || 'EURUSD',
-      (metrics.entry || metrics).volume || 1.0,
-      metrics.entry || metrics,
+    const context: AiAnalysisContext = {
+      login: caseFile.clientLogin,
+      ticketId: caseFile.ticketId,
+      symbol: caseFile.symbol || caseFile.title.split(' — ')[1]?.split(' ')[0] || 'EURUSD',
+      action: caseFile.action || (caseFile.title.includes('BUY') ? 'BUY' : 'SELL'),
+      volume: caseFile.volume || metrics.entry?.volume || 0.0,
+      entry: metrics.entry || null,
+      exit: metrics.exit || null,
+      summary: metrics.summary || null,
       events,
-    );
+    };
+
+    const reportText = await this.aiService.generateAnalysis(context);
 
     // 3. Cache the generated report
     const report = await this.prisma.aiReport.create({

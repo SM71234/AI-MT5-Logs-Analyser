@@ -288,13 +288,21 @@ def get_user_profile(login: str, request: Request):
                     raise HTTPException(status_code=404, detail=f"Client login #{login} not found on broker server")
                     
                 balance = getattr(user, "Balance", 0.0)
-                equity = getattr(user, "Equity", 0.0)
+                equity = balance
                 leverage = getattr(user, "Leverage", 100)
                 name = getattr(user, "Name", "Unknown Client")
                 group = getattr(user, "Group", "demo\\standard")
                 last_ip = getattr(user, "LastIP", "")
                 last_access = getattr(user, "LastAccess", 0)
                 registration = getattr(user, "Registration", 0)
+                
+                try:
+                    account = manager.UserAccountGet(int(login))
+                    if account:
+                        balance = getattr(account, "Balance", balance)
+                        equity = getattr(account, "Equity", balance)
+                except Exception:
+                    pass
                 
             return {
                 "success": True,

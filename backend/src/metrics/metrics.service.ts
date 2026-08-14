@@ -9,6 +9,7 @@ export interface CalculatedMetrics {
   dealerBridgeResponseTimeMs: number | null;
   pendingWaitingTimeMs: number | null;
   holdTimeMs: number | null;
+  timestamp?: string | null;
   
   slippagePoints: number | null;
   slippageType: 'Adverse' | 'Favorable' | 'Zero' | 'N/A';
@@ -120,6 +121,23 @@ export class MetricsService {
         if (dealerBridgeResponseTimeMs < 0) dealerBridgeResponseTimeMs = 0;
       }
 
+      if (!execReqEvent && (routeEvent || requestEvent)) {
+        const start = routeEvent || requestEvent;
+        if (start) {
+          if (dealExecEvent) {
+            executionProcessingMs = new Date(dealExecEvent.timestamp).getTime() - new Date(start.timestamp).getTime();
+            if (executionProcessingMs < 0) executionProcessingMs = 0;
+          }
+          if (execResEvent) {
+            dealerBridgeResponseTimeMs = new Date(execResEvent.timestamp).getTime() - new Date(start.timestamp).getTime();
+            if (dealerBridgeResponseTimeMs < 0) dealerBridgeResponseTimeMs = 0;
+          }
+          if (routeEvent) {
+            executionRequestDelayMs = 0;
+          }
+        }
+      }
+
       if (orderPlacedEvent && orderTriggeredEvent) {
         pendingWaitingTimeMs = new Date(orderTriggeredEvent.timestamp).getTime() - new Date(orderPlacedEvent.timestamp).getTime();
         if (pendingWaitingTimeMs < 0) pendingWaitingTimeMs = 0;
@@ -197,6 +215,7 @@ export class MetricsService {
       executionProcessingMs,
       dealerBridgeResponseTimeMs,
       pendingWaitingTimeMs,
+      timestamp: dealExecEvent?.timestamp || null,
       holdTimeMs: null, // Hold time is round-trip and filled in analyzeExecution
 
       slippagePoints: slippagePoints !== null ? parseFloat(slippagePoints.toFixed(1)) : null,

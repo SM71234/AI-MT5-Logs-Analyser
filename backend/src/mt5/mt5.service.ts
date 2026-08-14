@@ -38,7 +38,7 @@ export class Mt5Service {
 
   // Fetches client details by login ID
   async getClientProfile(brokerId: string, login: string, operatorId: string, ipAddress?: string): Promise<any> {
-    const broker = await this.brokersService.findOneWithCredentials(brokerId, operatorId, ipAddress);
+    const broker = await this.brokersService.findOneWithCredentials(brokerId, operatorId, ipAddress, false);
     
     this.logger.log(`Fetching client profile for login #${login} on broker: ${broker.name}`);
 
@@ -76,7 +76,7 @@ export class Mt5Service {
     from?: string,
     to?: string,
   ): Promise<any[]> {
-    const broker = await this.brokersService.findOneWithCredentials(brokerId, operatorId, ipAddress);
+    const broker = await this.brokersService.findOneWithCredentials(brokerId, operatorId, ipAddress, false);
 
     this.logger.log(`Fetching client trades for login #${login} on broker: ${broker.name} (range: ${from || 'default'} to ${to || 'default'})`);
 
@@ -105,7 +105,16 @@ export class Mt5Service {
       const body = await res.json();
       const rawTrades = body.data || [];
       return rawTrades.map((trade: any) => {
-        const analysis = this.metricsService.analyzeExecution(trade.entry, trade.exit);
+        const entryParam = trade.entry ? {
+          ...trade.entry,
+          totalObservableExecutionTimeMs: trade.entry.totalObservableExecutionTimeMs ?? trade.entry.latencyMs,
+        } : null;
+        const exitParam = trade.exit ? {
+          ...trade.exit,
+          totalObservableExecutionTimeMs: trade.exit.totalObservableExecutionTimeMs ?? trade.exit.latencyMs,
+        } : null;
+
+        const analysis = this.metricsService.analyzeExecution(entryParam, exitParam);
         return {
           ...trade,
           executionAnalysis: analysis,
@@ -126,7 +135,7 @@ export class Mt5Service {
     from?: number,
     to?: number,
   ): Promise<string[]> {
-    const broker = await this.brokersService.findOneWithCredentials(brokerId, operatorId, ipAddress);
+    const broker = await this.brokersService.findOneWithCredentials(brokerId, operatorId, ipAddress, false);
 
     this.logger.log(`Fetching client journals for login #${login} on broker: ${broker.name} (range: ${from ?? 'default'} to ${to ?? 'default'})`);
 
@@ -163,7 +172,7 @@ export class Mt5Service {
     operatorId: string,
     ipAddress?: string,
   ): Promise<{ digits: number | null; point: number | null }> {
-    const broker = await this.brokersService.findOneWithCredentials(brokerId, operatorId, ipAddress);
+    const broker = await this.brokersService.findOneWithCredentials(brokerId, operatorId, ipAddress, false);
 
     this.logger.log(`Fetching symbol specs for ${symbol} on broker: ${broker.name}`);
 
