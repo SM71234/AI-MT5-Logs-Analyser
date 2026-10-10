@@ -5,6 +5,7 @@ build/
 .next/
 
 # Virtual environments
+.venv*/
 .venv/
 venv/
 ENV/

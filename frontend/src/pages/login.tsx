@@ -1,6 +1,7 @@
 import React, { useState } from 'react';
 import { useAuth } from '../hooks/useAuth';
 import { KeyRound, Mail, AlertTriangle, Eye, EyeOff, UserCheck, CheckCircle } from 'lucide-react';
+import { safeJsonParse } from '../utils/api';
 
 export default function LoginPage() {
   const { login, isLoading } = useAuth();
@@ -33,7 +34,7 @@ export default function LoginPage() {
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ email, password, name }),
         });
-        const body = await res.json();
+        const body = await safeJsonParse(res);
         if (!res.ok) {
           console.error('[Login] Registration API error:', body);
           throw new Error(body.message || 'Registration failed');

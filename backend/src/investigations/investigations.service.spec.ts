@@ -6,6 +6,7 @@ import { JournalEngineService } from '../journal/journal-engine.service';
 import { MetricsService, CalculatedMetrics } from '../metrics/metrics.service';
 import { AiService } from '../ai/ai.service';
 import { NotFoundException, InternalServerErrorException } from '@nestjs/common';
+import { PositionLedgerService } from '../journal/position-ledger.service';
 
 describe('InvestigationsService', () => {
   let service: InvestigationsService;
@@ -64,6 +65,7 @@ describe('InvestigationsService', () => {
     moduleRef = await Test.createTestingModule({
       providers: [
         InvestigationsService,
+        PositionLedgerService,
         { provide: PrismaService, useValue: mockPrismaService },
         { provide: Mt5Service, useValue: mockMt5Service },
         { provide: JournalEngineService, useValue: mockJournalEngineService },

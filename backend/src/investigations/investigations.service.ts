@@ -2,9 +2,10 @@ import { Injectable, NotFoundException, BadRequestException, Logger, OnModuleIni
 import { PrismaService } from '../prisma/prisma.service';
 import { Mt5Service } from '../mt5/mt5.service';
 import { JournalEngineService } from '../journal/journal-engine.service';
+import { PositionLedgerService } from '../journal/position-ledger.service';
 import { MetricsService, CalculatedMetrics } from '../metrics/metrics.service';
 import { NormalizedEvent } from '../journal/normalization.engine';
-import { AiService, AiAnalysisContext } from '../ai/ai.service';
+import { AiService, AiAnalysisContext, TradeInvestigationContext } from '../ai/ai.service';
 import { CreateInvestigationDto } from './dto/create-investigation.dto';
 import { CreateNoteDto } from './dto/create-note.dto';
 import { ChatFollowupDto } from './dto/chat-followup.dto';
@@ -18,6 +19,7 @@ export class InvestigationsService implements OnModuleInit {
     private readonly prisma: PrismaService,
     private readonly mt5Service: Mt5Service,
     private readonly journalEngineService: JournalEngineService,
+    private readonly positionLedgerService: PositionLedgerService,
     private readonly metricsService: MetricsService,
     private readonly aiService: AiService,
   ) {}
@@ -93,12 +95,17 @@ export class InvestigationsService implements OnModuleInit {
     let toTs: number | undefined;
 
     if (targetTrade) {
-      const tradeTimeStr = targetTrade.timeExecuted || targetTrade.timeRequested;
-      if (tradeTimeStr) {
-        const tradeTimeSecs = Math.floor(new Date(tradeTimeStr).getTime() / 1000);
-        // Set window to 30 minutes before and after
-        fromTs = tradeTimeSecs - 1800;
-        toTs = tradeTimeSecs + 1800;
+      const openSecs = targetTrade.timeRequested ? Math.floor(new Date(targetTrade.timeRequested).getTime() / 1000) : null;
+      const closeSecs = targetTrade.timeExecuted ? Math.floor(new Date(targetTrade.timeExecuted).getTime() / 1000) : null;
+
+      if (openSecs && closeSecs) {
+        // Encompass full lifecycle from opening request to closing deal with safety buffer
+        fromTs = Math.min(openSecs, closeSecs) - 300;
+        toTs = Math.max(openSecs, closeSecs) + 300;
+      } else if (openSecs || closeSecs) {
+        const baseSecs = (openSecs ?? closeSecs)!;
+        fromTs = baseSecs - 300;
+        toTs = baseSecs + 1800;
       }
     } else {
       // Fallback for rejected/missing trades: query logs from the last 3 days
@@ -117,49 +124,56 @@ export class InvestigationsService implements OnModuleInit {
       toTs,
     );
 
-    // 3. Correlate logs into timelines
+    // 3. Correlate logs and reconstruct position using ledger service
     const incidents = this.journalEngineService.processLogs(rawLogs);
-    
-    let entryIncident;
-    let exitIncident = null;
-    
-    if (targetTrade) {
-      const entryOrderId = targetTrade.entry?.orderId;
-      const entryDealId = targetTrade.entry?.dealId;
-      const exitOrderId = targetTrade.exit?.orderId;
-      const exitDealId = targetTrade.exit?.dealId;
-      
-      entryIncident = incidents.find((incident) => {
-        return incident.events.some((e) => {
-          const orderId = e.metadata.orderId;
-          const dealId = e.metadata.dealId;
-          const ticket = e.metadata.ticket;
-          
-          return (entryOrderId && orderId === entryOrderId) || 
-                 (entryDealId && dealId === entryDealId) ||
-                 (ticket && ticket === dto.ticket);
-        });
-      });
-      
-      exitIncident = incidents.find((incident) => {
-        if (!exitOrderId && !exitDealId) return false;
-        return incident.events.some((e) => {
-          const orderId = e.metadata.orderId;
-          const dealId = e.metadata.dealId;
-          
-          return (exitOrderId && orderId === exitOrderId) || 
-                 (exitDealId && dealId === exitDealId);
-        });
-      }) || null;
-    } else {
-      // It might be a rejected trade that only exists in the journal log.
-      // Search the correlated incidents directly by ticket ID
-      entryIncident = incidents.find((incident) => {
-        return incident.ticketId === dto.ticket || incident.events.some((e) => {
-          return e.metadata.orderId === dto.ticket || 
-                 e.metadata.ticket === dto.ticket;
-        });
-      });
+    const ledgers = this.positionLedgerService.reconstructPositions(incidents, trades);
+    const targetLedger = ledgers.find(l => {
+      return l.positionId === dto.ticket || 
+             l.entryDeals.some(d => d.ticketId === dto.ticket) ||
+             l.exitDeals.some(d => d.ticketId === dto.ticket) ||
+             l.reversalDeals.some(d => d.ticketId === dto.ticket);
+    });
+
+    let entryIncident = targetLedger?.entryDeals[0] || null;
+    let exitIncident = targetLedger?.exitDeals[targetLedger.exitDeals.length - 1] || null;
+
+    if (!entryIncident) {
+      if (targetTrade) {
+        const entryOrderId = targetTrade.entry?.orderId;
+        const entryDealId = targetTrade.entry?.dealId;
+        const exitOrderId = targetTrade.exit?.orderId;
+        const exitDealId = targetTrade.exit?.dealId;
+        
+        entryIncident = incidents.find((incident) => {
+          return incident.events.some((e) => {
+            const orderId = e.metadata.orderId;
+            const dealId = e.metadata.dealId;
+            const ticket = e.metadata.ticket;
+            
+            return (entryOrderId && orderId === entryOrderId) || 
+                   (entryDealId && dealId === entryDealId) ||
+                   (ticket && ticket === dto.ticket);
+          });
+        }) || null;
+        
+        exitIncident = incidents.find((incident) => {
+          if (!exitOrderId && !exitDealId) return false;
+          return incident.events.some((e) => {
+            const orderId = e.metadata.orderId;
+            const dealId = e.metadata.dealId;
+            
+            return (exitOrderId && orderId === exitOrderId) || 
+                   (exitDealId && dealId === exitDealId);
+          });
+        }) || null;
+      } else {
+        entryIncident = incidents.find((incident) => {
+          return incident.ticketId === dto.ticket || incident.events.some((e) => {
+            return e.metadata.orderId === dto.ticket || 
+                   e.metadata.ticket === dto.ticket;
+          });
+        }) || null;
+      }
     }
 
     if (!entryIncident) {
@@ -168,9 +182,10 @@ export class InvestigationsService implements OnModuleInit {
       );
     }
  
-     // 3. Programmatically calculate execution metrics for entry and exit separately
+     // 3. Programmatically calculate execution metrics for all entry, exit, and reversal deals
      let digits: number | null = null;
      let point: number | null = null;
+      let specSource: any = 'HEURISTIC';
      try {
        const symbolInfo = await this.mt5Service.getSymbolSpecs(
          dto.brokerId,
@@ -181,33 +196,84 @@ export class InvestigationsService implements OnModuleInit {
        if (symbolInfo) {
          digits = symbolInfo.digits;
          point = symbolInfo.point;
+         specSource = symbolInfo.source || 'MT5_SERVER';
        }
      } catch (error) {
        this.logger.warn(`Failed to resolve dynamic symbol specs for ${entryIncident.symbol}`, error);
      }
  
-     const entryMetrics = this.metricsService.calculate(entryIncident, digits, point);
-     const exitMetrics = exitIncident
-       ? this.metricsService.calculate(exitIncident, digits, point)
-       : null;
+     const entriesMetrics = targetLedger
+        ? targetLedger.entryDeals.map((d) => this.metricsService.calculate(d, digits, point, specSource))
+        : [this.metricsService.calculate(entryIncident, digits, point, specSource)];
 
-      // Combine events from both entry and exit executions for a complete timeline display
-      const combinedEvents = [...entryIncident.events];
-      if (exitIncident) {
-        for (const ev of exitIncident.events) {
-          if (!combinedEvents.some((e) => e.timestamp === ev.timestamp && e.eventType === ev.eventType)) {
+      const exitsMetrics = targetLedger
+        ? targetLedger.exitDeals.map((d) => this.metricsService.calculate(d, digits, point, specSource))
+        : (exitIncident ? [this.metricsService.calculate(exitIncident, digits, point, specSource)] : []);
+
+      const reversalsMetrics = targetLedger
+        ? targetLedger.reversalDeals.map((d) => this.metricsService.calculate(d, digits, point, specSource))
+        : [];
+
+      let entryMetrics = entriesMetrics[0];
+      if (!entryMetrics && entryIncident) {
+        entryMetrics = this.metricsService.calculate(entryIncident, digits, point, specSource);
+      }
+      if (!entryMetrics) {
+        entryMetrics = {
+          priceRequested: 0,
+          priceExecuted: 0,
+          slippagePoints: 0,
+          slippageType: 'Zero',
+          executed: false,
+          status: 'UNKNOWN',
+          rejection: {
+            isRejected: false,
+            reason: null,
+            rawReason: null,
+            rejectedBy: null,
+            failedStage: null,
+            lastSuccessfulStage: null,
+          },
+        } as any;
+      }
+      if (entriesMetrics.length === 0) {
+        entriesMetrics.push(entryMetrics);
+      }
+
+      let exitMetrics = exitsMetrics[exitsMetrics.length - 1] || null;
+      if (!exitMetrics && exitIncident) {
+        exitMetrics = this.metricsService.calculate(exitIncident, digits, point, specSource);
+      }
+      if (exitsMetrics.length === 0 && exitMetrics) {
+        exitsMetrics.push(exitMetrics);
+      }
+ 
+      // Combine events from all entry, exit, and reversal executions for a complete timeline display
+      const allIncidents = [
+        ...(targetLedger?.entryDeals || [entryIncident].filter(Boolean)),
+        ...(targetLedger?.exitDeals || (exitIncident ? [exitIncident] : [])),
+        ...(targetLedger?.reversalDeals || [])
+      ];
+ 
+      const combinedEvents: NormalizedEvent[] = [];
+      for (const incident of allIncidents) {
+        for (const ev of incident.events) {
+          if (!combinedEvents.some((e) => e.timestamp === ev.timestamp && e.eventType === ev.eventType && e.rawMessage === ev.rawMessage)) {
             combinedEvents.push(ev);
           }
         }
       }
       combinedEvents.sort((a, b) => new Date(a.timestamp).getTime() - new Date(b.timestamp).getTime());
-
+ 
       // Calculate overall trade summaries using the shared execution analysis engine
       const executionAnalysis = this.metricsService.analyzeExecution(entryMetrics, exitMetrics);
-
+ 
       const structuredMetrics = {
         entry: entryMetrics,
         exit: exitMetrics,
+        entries: entriesMetrics,
+        exits: exitsMetrics,
+        reversals: reversalsMetrics,
         summary: {
           netAdversePriceImpact: executionAnalysis.netSlippage.slippageType === 'Adverse' 
             ? executionAnalysis.netSlippage.slippagePoints 
@@ -223,7 +289,10 @@ export class InvestigationsService implements OnModuleInit {
           entryMetrics,
           exitIncident,
           exitMetrics,
-          combinedEvents
+          combinedEvents,
+          entriesMetrics,
+          exitsMetrics,
+          reversalsMetrics,
         ),
       };
  
@@ -327,16 +396,17 @@ export class InvestigationsService implements OnModuleInit {
         const rawLines = parsedEvents.map((e: any) => e.rawMessage);
         const correlated = this.journalEngineService.processLogs(rawLines);
         
-        // Fetch trades from connector to get entry/exit IDs
         let targetTrade: any = null;
+        let trades: any[] = [];
         try {
-          const trades = await this.mt5Service.getClientTrades(
+          const fetchedTrades = await this.mt5Service.getClientTrades(
             caseFile.brokerId,
             caseFile.clientLogin,
             'SYSTEM',
             undefined,
           );
-          if (trades && Array.isArray(trades)) {
+          if (fetchedTrades && Array.isArray(fetchedTrades)) {
+            trades = fetchedTrades;
             targetTrade = trades.find((t: any) => {
               return t.ticketId === caseFile.ticketId || 
                      t.entry?.orderId === caseFile.ticketId || 
@@ -357,52 +427,96 @@ export class InvestigationsService implements OnModuleInit {
         let exitOrderId = targetTrade?.exit?.orderId;
         let exitDealId = targetTrade?.exit?.dealId;
 
-        // Correlate using the strongest identifiers
-        const entryInc = Array.isArray(correlated) ? correlated.find((incident) => {
-          return incident.events.some((e) => {
-            const orderId = e.metadata.orderId;
-            const dealId = e.metadata.dealId;
-            const ticket = e.metadata.ticket;
-            
-            return (entryOrderId && orderId === entryOrderId) || 
-                   (entryDealId && dealId === entryDealId) ||
-                   (ticket && (ticket === caseFile.ticketId || ticket === entryOrderId || ticket === entryDealId)) ||
-                   incident.ticketId === caseFile.ticketId;
-          });
-        }) : null;
+        const ledgers = this.positionLedgerService.reconstructPositions(correlated, trades);
+        const targetLedger = ledgers.find(l => {
+          return l.positionId === caseFile.ticketId || 
+                 l.entryDeals.some(d => d.ticketId === caseFile.ticketId) ||
+                 l.exitDeals.some(d => d.ticketId === caseFile.ticketId) ||
+                 l.reversalDeals.some(d => d.ticketId === caseFile.ticketId);
+        });
 
-        const exitInc = (Array.isArray(correlated) && (exitOrderId || exitDealId)) ? correlated.find((incident) => {
-          return incident.events.some((e) => {
-            const orderId = e.metadata.orderId;
-            const dealId = e.metadata.dealId;
-            
-            return (exitOrderId && orderId === exitOrderId) || 
-                   (exitDealId && dealId === exitDealId) ||
-                   incident.ticketId === exitOrderId ||
-                   incident.ticketId === exitDealId;
-          });
-        }) || null : null;
+        let entryInc = targetLedger?.entryDeals[0] || null;
+        let exitInc = targetLedger?.exitDeals[targetLedger.exitDeals.length - 1] || null;
+
+        if (!entryInc && Array.isArray(correlated)) {
+          entryInc = correlated.find((incident) => {
+            return incident.events.some((e) => {
+              const orderId = e.metadata.orderId;
+              const dealId = e.metadata.dealId;
+              const ticket = e.metadata.ticket;
+              
+              return (entryOrderId && orderId === entryOrderId) || 
+                     (entryDealId && dealId === entryDealId) ||
+                     (ticket && (ticket === caseFile.ticketId || ticket === entryOrderId || ticket === entryDealId)) ||
+                     incident.ticketId === caseFile.ticketId;
+            });
+          }) || null;
+        }
         
         if (entryInc) {
-          const entryM = this.metricsService.calculate(
-            entryInc,
-            parsedMetrics.digits || parsedMetrics.entry?.digits,
-            parsedMetrics.pointSize || parsedMetrics.entry?.pointSize
-          );
-          const exitM = exitInc 
-            ? this.metricsService.calculate(
-                exitInc,
-                parsedMetrics.digits || parsedMetrics.entry?.digits,
-                parsedMetrics.pointSize || parsedMetrics.entry?.pointSize
-              )
-            : null;
+          const calcDigits = parsedMetrics.digits || parsedMetrics.entry?.digits || null;
+          const calcPoint = parsedMetrics.pointSize || parsedMetrics.entry?.pointSize || null;
+          const calcSource = parsedMetrics.entry?.pointSizeSource || 'HEURISTIC';
+
+          const entriesMetrics = targetLedger
+            ? targetLedger.entryDeals.map((d) => this.metricsService.calculate(d, calcDigits, calcPoint, calcSource))
+            : [this.metricsService.calculate(entryInc, calcDigits, calcPoint, calcSource)];
+
+          const exitsMetrics = targetLedger
+            ? targetLedger.exitDeals.map((d) => this.metricsService.calculate(d, calcDigits, calcPoint, calcSource))
+            : (exitInc ? [this.metricsService.calculate(exitInc, calcDigits, calcPoint, calcSource)] : []);
+
+          const reversalsMetrics = targetLedger
+            ? targetLedger.reversalDeals.map((d) => this.metricsService.calculate(d, calcDigits, calcPoint, calcSource))
+            : [];
+
+          let entryM = entriesMetrics[0];
+          if (!entryM && entryInc) {
+            entryM = this.metricsService.calculate(entryInc, calcDigits, calcPoint, calcSource);
+          }
+          if (!entryM) {
+            entryM = {
+              priceRequested: 0,
+              priceExecuted: 0,
+              slippagePoints: 0,
+              slippageType: 'Zero',
+              executed: false,
+              status: 'UNKNOWN',
+              rejection: {
+                isRejected: false,
+                reason: null,
+                rawReason: null,
+                rejectedBy: null,
+                failedStage: null,
+                lastSuccessfulStage: null,
+              },
+            } as any;
+          }
+          if (entriesMetrics.length === 0) {
+            entriesMetrics.push(entryM);
+          }
+
+          let exitM = exitsMetrics[exitsMetrics.length - 1] || null;
+          if (!exitM && exitInc) {
+            exitM = this.metricsService.calculate(exitInc, calcDigits, calcPoint, calcSource);
+          }
+          if (exitsMetrics.length === 0 && exitM) {
+            exitsMetrics.push(exitM);
+          }
           
           const executionAnalysis = this.metricsService.analyzeExecution(entryM, exitM);
           
-          const combinedRecorrelatedEvents = [...entryInc.events];
-          if (exitInc) {
-            for (const ev of exitInc.events) {
-              if (!combinedRecorrelatedEvents.some((e) => e.timestamp === ev.timestamp && e.eventType === ev.eventType)) {
+          // Combine events from all entry, exit, and reversal executions
+          const allIncidents = [
+            ...(targetLedger?.entryDeals || [entryInc].filter(Boolean)),
+            ...(targetLedger?.exitDeals || (exitInc ? [exitInc] : [])),
+            ...(targetLedger?.reversalDeals || [])
+          ];
+
+          const combinedRecorrelatedEvents: NormalizedEvent[] = [];
+          for (const incident of allIncidents) {
+            for (const ev of incident.events) {
+              if (!combinedRecorrelatedEvents.some((e) => e.timestamp === ev.timestamp && e.eventType === ev.eventType && e.rawMessage === ev.rawMessage)) {
                 combinedRecorrelatedEvents.push(ev);
               }
             }
@@ -412,6 +526,9 @@ export class InvestigationsService implements OnModuleInit {
           parsedMetrics = {
             entry: entryM,
             exit: exitM,
+            entries: entriesMetrics,
+            exits: exitsMetrics,
+            reversals: reversalsMetrics,
             summary: {
               netAdversePriceImpact: executionAnalysis.netSlippage.slippageType === 'Adverse'
                 ? executionAnalysis.netSlippage.slippagePoints
@@ -427,7 +544,10 @@ export class InvestigationsService implements OnModuleInit {
               entryM,
               exitInc || null,
               exitM,
-              combinedRecorrelatedEvents
+              combinedRecorrelatedEvents,
+              entriesMetrics,
+              exitsMetrics,
+              reversalsMetrics,
             )
           };
           
@@ -562,16 +682,29 @@ export class InvestigationsService implements OnModuleInit {
     }
 
     // 2. Perform AI completions
-    const context: AiAnalysisContext = {
-      login: caseFile.clientLogin,
-      ticketId: caseFile.ticketId,
+    const context: TradeInvestigationContext = {
+      contextVersion: '1',
+      identity: {
+        login: caseFile.clientLogin,
+        positionId: metrics.canonicalResult?.positionId || undefined,
+        dealId: metrics.canonicalResult?.dealId || undefined,
+        orderId: metrics.canonicalResult?.orderId || undefined,
+        ticketId: caseFile.ticketId,
+        requestId: metrics.canonicalResult?.requestId || undefined,
+      },
       symbol: caseFile.symbol || caseFile.title.split(' — ')[1]?.split(' ')[0] || 'EURUSD',
       action: caseFile.action || (caseFile.title.includes('BUY') ? 'BUY' : 'SELL'),
       volume: caseFile.volume || metrics.entry?.volume || 0.0,
-      entry: metrics.entry || null,
-      exit: metrics.exit || null,
-      summary: metrics.summary || null,
+      deterministicFacts: {
+        entry: metrics.entry || null,
+        exit: metrics.exit || null,
+        summary: metrics.summary || null,
+        entries: metrics.entries || [],
+        exits: metrics.exits || [],
+        reversals: metrics.reversals || [],
+      },
       events,
+      canonicalResult: metrics.canonicalResult || null,
     };
 
     const reportText = await this.aiService.generateAnalysis(context);
@@ -609,25 +742,44 @@ export class InvestigationsService implements OnModuleInit {
       throw new NotFoundException(`Case file not found`);
     }
 
+    const { metrics, events } = await this.recalculateIfNeeded(caseFile, true);
+
+    const context: TradeInvestigationContext = {
+      contextVersion: '1',
+      identity: {
+        login: caseFile.clientLogin,
+        positionId: metrics.canonicalResult?.positionId || undefined,
+        dealId: metrics.canonicalResult?.dealId || undefined,
+        orderId: metrics.canonicalResult?.orderId || undefined,
+        ticketId: caseFile.ticketId,
+        requestId: metrics.canonicalResult?.requestId || undefined,
+      },
+      symbol: caseFile.symbol || caseFile.title.split(' — ')[1]?.split(' ')[0] || 'EURUSD',
+      action: caseFile.action || (caseFile.title.includes('BUY') ? 'BUY' : 'SELL'),
+      volume: caseFile.volume || metrics.entry?.volume || 0.0,
+      deterministicFacts: {
+        entry: metrics.entry || null,
+        exit: metrics.exit || null,
+        summary: metrics.summary || null,
+        entries: metrics.entries || [],
+        exits: metrics.exits || [],
+        reversals: metrics.reversals || [],
+      },
+      events,
+      canonicalResult: metrics.canonicalResult || null,
+    };
+
     const latestReport = caseFile.aiReports[0];
-    if (!latestReport) {
-      throw new BadRequestException('You must generate the AI Analysis report before starting a follow-up chat');
-    }
+    const reportText = latestReport ? latestReport.response : null;
 
     const history = (dto.chatHistory || []).map((msg) => ({
       role: msg.role,
       content: msg.content,
     }));
 
-    let canonicalResult = null;
-    try {
-      const parsedMetrics = JSON.parse(caseFile.metrics);
-      canonicalResult = parsedMetrics.canonicalResult || null;
-    } catch (e) {}
-
     const response = await this.aiService.followUpChat(
-      latestReport.response,
-      canonicalResult,
+      context,
+      reportText,
       history,
       dto.message,
     );
@@ -649,11 +801,14 @@ export class InvestigationsService implements OnModuleInit {
     entryMetrics: CalculatedMetrics,
     exitIncident: any | null,
     exitMetrics: CalculatedMetrics | null,
-    combinedEvents: NormalizedEvent[]
+    combinedEvents: NormalizedEvent[],
+    entriesMetrics?: CalculatedMetrics[],
+    exitsMetrics?: CalculatedMetrics[],
+    reversalsMetrics?: CalculatedMetrics[],
   ): any {
-    const isRejected = entryMetrics.rejection?.isRejected || false;
-    const executed = entryMetrics.executed;
-    const status = entryMetrics.status;
+    const isRejected = entryMetrics?.rejection?.isRejected || false;
+    const executed = entryMetrics?.executed || false;
+    const status = entryMetrics?.status || 'UNKNOWN';
     
     const openSubmittedEvent = entryIncident.events.find((e: any) => e.eventType === 'REQUEST' || e.eventType === 'ORDER_PLACED');
     const openExecutedEvent = entryIncident.events.find((e: any) => e.eventType === 'DEAL_EXECUTED' || e.eventType === 'ORDER_FILLED');
@@ -669,7 +824,7 @@ export class InvestigationsService implements OnModuleInit {
       const dealId = ev.metadata.dealId || '';
       if (orderId) relatedIds.push(`Order #${orderId}`);
       if (dealId) relatedIds.push(`Deal #${dealId}`);
-
+ 
       switch (ev.eventType) {
         case 'REQUEST':
           explanation = `Client submitted a ${ev.metadata.action || 'trade'} request for ${ev.metadata.volume || '0'} Lot ${ev.metadata.symbol || ''} at price ${ev.metadata.priceRequested || 'market'}.`;
@@ -716,7 +871,7 @@ export class InvestigationsService implements OnModuleInit {
           technicalDetails = `Raw log message.`;
           break;
       }
-
+ 
       return {
         timestamp: ev.timestamp,
         eventType: ev.eventType,
@@ -726,12 +881,12 @@ export class InvestigationsService implements OnModuleInit {
         evidenceId: `log_${index}`,
       };
     });
-
+ 
     // Construct evidence tracing support list
     const evidence = combinedEvents.map((ev, index) => {
       let claim = '';
       let type: 'FACT' | 'CALCULATION' | 'INFERENCE' | 'UNKNOWN' = 'FACT';
-
+ 
       switch (ev.eventType) {
         case 'REQUEST':
           claim = `Client submitted trade request for ${ev.metadata.symbol}`;
@@ -754,7 +909,7 @@ export class InvestigationsService implements OnModuleInit {
           type = 'FACT';
           break;
       }
-
+ 
       return {
         id: `log_${index}`,
         timestamp: ev.timestamp,
@@ -763,30 +918,30 @@ export class InvestigationsService implements OnModuleInit {
         rawLog: ev.rawMessage,
       };
     });
-
+ 
     // Deterministic confidence calculation
     let confidence: 'HIGH' | 'MEDIUM' | 'LOW' | 'UNKNOWN' = 'UNKNOWN';
-    if (executed && entryMetrics.totalObservableExecutionTimeMs !== null) {
+    if (executed && entryMetrics?.totalObservableExecutionTimeMs !== null) {
       confidence = 'HIGH';
-    } else if (isRejected && entryMetrics.rejection?.rawReason) {
+    } else if (isRejected && entryMetrics?.rejection?.rawReason) {
       confidence = 'HIGH';
     } else if (combinedEvents.length > 1) {
       confidence = 'MEDIUM';
     } else if (combinedEvents.length === 1) {
       confidence = 'LOW';
     }
-
+ 
     // Determine limitations
     const limitations: string[] = [];
-    if (isRejected && !entryMetrics.rejection?.rawReason) {
+    if (isRejected && !entryMetrics?.rejection?.rawReason) {
       limitations.push('The available logs do not specify the underlying server rejection reason.');
     }
     if (status === 'INCOMPLETE') {
       limitations.push('Log sequence ends abruptly with no explicit execution or rejection event.');
     }
-
+ 
     const executionAnalysis = this.metricsService.analyzeExecution(entryMetrics, exitMetrics);
-
+ 
     return {
       trade: {
         clientLogin,
@@ -796,32 +951,37 @@ export class InvestigationsService implements OnModuleInit {
         orderId: orderId,
         dealId: dealId,
         positionId: ticketId,
-        requestedPrice: entryMetrics.priceRequested ?? null,
+        requestedPrice: entryMetrics?.priceRequested ?? null,
         timestamp: entryIncident.events[0]?.timestamp || new Date().toISOString(),
       },
       status,
       execution: {
         executed,
-        executionPrice: entryMetrics.priceExecuted ?? null,
-        slippagePips: entryMetrics.slippagePoints,
-        slippagePoints: entryMetrics.slippagePoints,
-        slippageType: entryMetrics.slippageType,
-        executionLatencyMs: entryMetrics.totalObservableExecutionTimeMs,
+        executionPrice: entryMetrics?.priceExecuted ?? null,
+        slippagePips: entryMetrics?.slippagePoints,
+        slippagePoints: entryMetrics?.slippagePoints,
+        slippageType: entryMetrics?.slippageType,
+        executionLatencyMs: entryMetrics?.totalObservableExecutionTimeMs,
       },
       rejection: {
         isRejected,
-        reason: entryMetrics.rejection?.reason ?? null,
-        rawReason: entryMetrics.rejection?.rawReason ?? null,
-        rejectedBy: entryMetrics.rejection?.rejectedBy ?? null,
-        failedStage: entryMetrics.rejection?.failedStage ?? null,
-        lastSuccessfulStage: entryMetrics.rejection?.lastSuccessfulStage ?? null,
-        rejectionLatencyMs: entryMetrics.totalObservableExecutionTimeMs,
+        reason: entryMetrics?.rejection?.reason ?? null,
+        rawReason: entryMetrics?.rejection?.rawReason ?? null,
+        rejectedBy: entryMetrics?.rejection?.rejectedBy ?? null,
+        failedStage: entryMetrics?.rejection?.failedStage ?? null,
+        lastSuccessfulStage: entryMetrics?.rejection?.lastSuccessfulStage ?? null,
+        rejectionLatencyMs: entryMetrics?.totalObservableExecutionTimeMs,
       },
       executionAnalysis,
       timeline,
       evidence,
       confidence,
       limitations,
+      
+      // Multi-leg support
+      entries: entriesMetrics || [entryMetrics],
+      exits: exitsMetrics || (exitMetrics ? [exitMetrics] : []),
+      reversals: reversalsMetrics || [],
     };
   }
 

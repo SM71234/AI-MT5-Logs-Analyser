@@ -1,6 +1,7 @@
 import React, { createContext, useContext, useState, useEffect } from 'react';
 import { useNavigate, useLocation, Navigate } from 'react-router-dom';
 import { useMutation, useQuery, useQueryClient } from '@tanstack/react-query';
+import { safeJsonParse } from '../utils/api';
 
 export interface User {
   id: string;
@@ -57,7 +58,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error('Failed to load profile');
       }
 
-      const body = await res.json();
+      const body = await safeJsonParse(res);
       console.log('[AuthContext] auth-me fetch success. User details:', body.data);
       return body.data as User;
     },
@@ -91,7 +92,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         throw new Error('Refresh expired');
       }
 
-      const body = await res.json();
+      const body = await safeJsonParse(res);
       const newAccessToken = body.data.accessToken;
 
       localStorage.setItem('access_token', newAccessToken);
@@ -112,7 +113,7 @@ export function AuthProvider({ children }: { children: React.ReactNode }) {
         body: JSON.stringify(credentials),
       });
 
-      const body = await res.json();
+      const body = await safeJsonParse(res);
       if (!res.ok) {
         console.error('[AuthContext] loginMutation API error response:', body);
         throw new Error(body.message || 'Login failed');

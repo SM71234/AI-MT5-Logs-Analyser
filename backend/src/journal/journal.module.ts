@@ -5,11 +5,12 @@ import { MetricsModule } from '../metrics/metrics.module';
 import { NormalizationEngine } from './normalization.engine';
 import { CorrelationEngine } from './correlation.engine';
 import { JournalEngineService } from './journal-engine.service';
+import { PositionLedgerService } from './position-ledger.service';
 
 @Module({
   imports: [Mt5Module, MetricsModule],
-  providers: [NormalizationEngine, CorrelationEngine, JournalEngineService],
+  providers: [NormalizationEngine, CorrelationEngine, JournalEngineService, PositionLedgerService],
   controllers: [JournalController],
-  exports: [NormalizationEngine, CorrelationEngine, JournalEngineService],
+  exports: [NormalizationEngine, CorrelationEngine, JournalEngineService, PositionLedgerService],
 })
 export class JournalModule {}

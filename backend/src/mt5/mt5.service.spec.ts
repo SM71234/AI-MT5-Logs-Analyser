@@ -84,14 +84,14 @@ describe('Mt5Service', () => {
       expect(brokersService.findOneWithCredentials).toHaveBeenCalledWith('broker-id', 'operator-id', undefined, false);
       expect(global.fetch).toHaveBeenCalledWith(
         'http://localhost:4500/api/v1/connector/users/1001',
-        {
+        expect.objectContaining({
           headers: {
             'x-mt5-server': 'mt5.alphabroker.com',
             'x-mt5-port': '443',
             'x-mt5-login': 'manager',
             'x-mt5-password': 'dec',
           },
-        },
+        }),
       );
       expect(result).toEqual(mockProfile);
     });

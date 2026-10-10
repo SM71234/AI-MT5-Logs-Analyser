@@ -1,14 +1,59 @@
 import { Injectable, Logger } from '@nestjs/common';
 
-function parseTimestamp(ts: string): string {
+export function parseFullTimestamp(ts: string): {
+  timestamp: string;
+  timestampRaw: string;
+  timestampServer: string;
+  timestampUtc: string | null;
+  timezoneSource: 'BROKER_CONFIG' | 'MT5_SERVER' | 'EXPLICIT_OFFSET' | 'SYSTEM_CONFIGURATION' | 'UNKNOWN';
+} {
+  const timestampRaw = ts;
+  
   let datePart = ts.slice(0, 10);
   const timePart = ts.slice(10);
   datePart = datePart.replace(/\./g, '-');
-  let clean = (datePart + timePart).replace(' ', 'T');
-  if (!clean.endsWith('Z')) {
-    clean += 'Z';
+  const clean = (datePart + timePart).replace(' ', 'T').trim();
+  
+  let timezoneSource: 'BROKER_CONFIG' | 'MT5_SERVER' | 'EXPLICIT_OFFSET' | 'SYSTEM_CONFIGURATION' | 'UNKNOWN' = 'UNKNOWN';
+  let timestampUtc: string | null = null;
+  
+  const hasZ = clean.toUpperCase().endsWith('Z');
+  const hasOffset = /T\d{2}:\d{2}:\d{2}(\.\d+)?([+-]\d{2}:\d{2})$/.test(clean);
+  
+  if (hasZ) {
+    timezoneSource = 'EXPLICIT_OFFSET';
+    timestampUtc = clean;
+  } else if (hasOffset) {
+    timezoneSource = 'EXPLICIT_OFFSET';
+    const parsedDate = new Date(clean);
+    if (!isNaN(parsedDate.getTime())) {
+      timestampUtc = parsedDate.toISOString();
+    }
   }
-  return clean;
+  
+  let timestampServer = clean;
+  if (hasZ) {
+    timestampServer = clean.slice(0, -1);
+  } else {
+    const offsetIndex = clean.lastIndexOf('+') !== -1 ? clean.lastIndexOf('+') : (clean.lastIndexOf('-') > 10 ? clean.lastIndexOf('-') : -1);
+    if (offsetIndex > 10) {
+      timestampServer = clean.substring(0, offsetIndex);
+    }
+  }
+
+  const legacyTimestamp = timestampUtc || timestampServer;
+
+  return {
+    timestamp: legacyTimestamp,
+    timestampRaw,
+    timestampServer,
+    timestampUtc,
+    timezoneSource,
+  };
+}
+
+function parseTimestamp(ts: string): string {
+  return parseFullTimestamp(ts).timestamp;
 }
 
 export type StandardEventType =
@@ -21,15 +66,25 @@ export type StandardEventType =
   | 'ORDER_TRIGGERED'
   | 'ORDER_FILLED'
   | 'ORDER_REJECTED'
-  | 'ORDER_CANCELLED';
+  | 'ORDER_CANCELLED'
+  | 'REQUOTED';
 
 export interface NormalizedEvent {
-  timestamp: string;
+  timestamp: string; // for backward compatibility
+  timestampRaw?: string;
+  timestampServer?: string;
+  timestampUtc?: string | null;
+  timezoneSource?: 'BROKER_CONFIG' | 'MT5_SERVER' | 'EXPLICIT_OFFSET' | 'SYSTEM_CONFIGURATION' | 'UNKNOWN';
   eventType: StandardEventType;
   rawMessage: string;
   login: string;
   metadata: {
-    ticket?: string;
+    ticket?: string; // legacy support
+    ticketId?: string;
+    positionId?: string;
+    orderId?: string;
+    dealId?: string;
+    requestId?: string;
     symbol?: string;
     action?: 'BUY' | 'SELL';
     volume?: number;
@@ -37,11 +92,18 @@ export interface NormalizedEvent {
     priceExecuted?: number;
     dealerId?: string;
     requotePrice?: number;
-    orderId?: string;
-    dealId?: string;
     rawReason?: string;
     rule?: string;
     requoteCount?: number;
+    rejectedBy?: string;
+    commission?: number;
+    swap?: number;
+    fee?: number;
+    profit?: number;
+    priceActivation?: number;
+    activationPrice?: number;
+    activationBid?: number;
+    activationAsk?: number;
   };
 }
 
@@ -53,12 +115,13 @@ export class NormalizationEngine {
     // 1. Pending order placed: [Trade] '1375': order placed [#3381804 buy stop 0.01 XAUUSD.rcnt at 4424.04], time 0.56 ms
     {
       type: 'ORDER_PLACED' as const,
-      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+order\s+placed\s+\[#(\d+)\s+(buy\s+limit|sell\s+limit|buy\s+stop|sell\s+stop|buy\s+stop\s+limit|sell\s+stop\s+limit)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)\]/i,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+(?:(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\s+)?(?:\[\w+\]\s+)?)?(?:[\w\s.-]+?\s+)?'(\d+)':\s+order\s+placed\s+\[#(\d+)\s+(buy\s+limit|sell\s+limit|buy\s+stop|sell\s+stop|buy\s+stop\s+limit|sell\s+stop\s+limit)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)\]/i,
       parse: (match: RegExpMatchArray) => ({
         timestamp: parseTimestamp(match[1]),
         login: match[2],
         metadata: {
           orderId: match[3],
+          ticketId: match[3],
           action: match[4].toLowerCase().includes('buy') ? ('BUY' as const) : ('SELL' as const),
           volume: parseFloat(match[5]),
           symbol: match[6],
@@ -69,24 +132,42 @@ export class NormalizationEngine {
     // 2. Pending order triggered: [Trade] '1375': order [#3381804 buy stop 0.01 XAUUSD.rcnt at 4424.04] triggered, activation price 4424.04 [4423.93 / 4424.04]
     {
       type: 'ORDER_TRIGGERED' as const,
-      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+order\s+\[#(\d+)\s+(?:buy\s+limit|sell\s+limit|buy\s+stop|sell\s+stop|buy\s+stop\s+limit|sell\s+stop\s+limit)\s+[\d\.]+\s+[\w\.-]+\s+at\s+[\d\.]+\]\s+triggered/i,
-      parse: (match: RegExpMatchArray) => ({
-        timestamp: parseTimestamp(match[1]),
-        login: match[2],
-        metadata: {
-          orderId: match[3],
-        },
-      }),
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+(?:(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\s+)?(?:\[\w+\]\s+)?)?(?:[\w\s.-]+?\s+)?'(\d+)':\s+order\s+\[#(\d+)\s+(buy\s+limit|sell\s+limit|buy\s+stop|sell\s+stop|buy\s+stop\s+limit|sell\s+stop\s+limit)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)\]\s+triggered(?:,\s+activation\s+price\s+([\d\.]+))?(?:\s+\[([\d\.]+)\s*\/\s*([\d\.]+)\])?/i,
+      parse: (match: RegExpMatchArray) => {
+        const action = match[4].toLowerCase().includes('buy') ? ('BUY' as const) : ('SELL' as const);
+        const orderPrice = parseFloat(match[7]);
+        const activationPrice = match[8] ? parseFloat(match[8]) : undefined;
+        const bid = match[9] ? parseFloat(match[9]) : undefined;
+        const ask = match[10] ? parseFloat(match[10]) : undefined;
+        const activationQuote = action === 'BUY' ? (ask ?? activationPrice) : (bid ?? activationPrice);
+        return {
+          timestamp: parseTimestamp(match[1]),
+          login: match[2],
+          metadata: {
+            orderId: match[3],
+            ticketId: match[3],
+            action,
+            volume: parseFloat(match[5]),
+            symbol: match[6],
+            priceRequested: orderPrice,
+            activationPrice,
+            activationBid: bid,
+            activationAsk: ask,
+            priceActivation: activationQuote,
+          },
+        };
+      },
     },
     // 3. Direct execution request: [Trade] '259713': order placed for execution [#6943681 sell 0.01 XAGUSD.i at market], time 1.10 ms
     {
       type: 'EXECUTION_REQUEST' as const,
-      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+order\s+placed\s+for\s+execution\s+\[#(\d+)\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+(market|[\d\.]+)\]/i,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+(?:(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\s+)?(?:\[\w+\]\s+)?)?(?:[\w\s.-]+?\s+)?'(\d+)':\s+order\s+placed\s+for\s+execution\s+\[#(\d+)\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+(market|[\d\.]+)\]/i,
       parse: (match: RegExpMatchArray) => ({
         timestamp: parseTimestamp(match[1]),
         login: match[2],
         metadata: {
           orderId: match[3],
+          ticketId: match[3],
           action: match[4].toUpperCase() as 'BUY' | 'SELL',
           volume: parseFloat(match[5]),
           symbol: match[6],
@@ -103,6 +184,7 @@ export class NormalizationEngine {
         login: match[2],
         metadata: {
           orderId: match[6],
+          ticketId: match[6],
           action: match[3].toUpperCase() as 'BUY' | 'SELL',
           volume: parseFloat(match[4]),
           priceExecuted: parseFloat(match[5]),
@@ -119,9 +201,10 @@ export class NormalizationEngine {
         login: match[2],
         metadata: {
           orderId: match[3],
+          dealId: match[6],
+          ticketId: match[6] || match[3],
           action: match[4].toUpperCase() as 'BUY' | 'SELL',
           priceExecuted: parseFloat(match[5]),
-          dealId: match[6],
         },
       }),
     },
@@ -134,6 +217,7 @@ export class NormalizationEngine {
         login: match[3],
         metadata: {
           dealId: match[4],
+          ticketId: match[4],
           action: match[5].toUpperCase() as 'BUY' | 'SELL',
           volume: parseFloat(match[6]),
           symbol: match[7],
@@ -144,7 +228,7 @@ export class NormalizationEngine {
     // 7. Close order request submitted: [Trade] '259713': market sell 0.01 XAGUSD.i, close #6943674 buy 0.01 XAGUSD.i 64.018 (63.972 / 63.997)
     {
       type: 'REQUEST' as const,
-      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+market\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+),\s+close\s+#(\d+)\s+(?:buy|sell)\s+[\d\.]+\s+[\w\.-]+\s+[\d\.]+\s+\(([\d\.]+)\s*\/\s*([\d\.]+)\)/i,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+(?:(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\s+)?(?:\[\w+\]\s+)?)?(?:[\w\s.-]+?\s+)?'(\d+)':\s+market\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+),\s+close\s+#(\d+)\s+(?:buy|sell)\s+[\d\.]+\s+[\w\.-]+\s+[\d\.]+\s+\(([\d\.]+)\s*\/\s*([\d\.]+)\)/i,
       parse: (match: RegExpMatchArray) => ({
         timestamp: parseTimestamp(match[1]),
         login: match[2],
@@ -152,10 +236,34 @@ export class NormalizationEngine {
           action: match[3].toUpperCase() as 'BUY' | 'SELL',
           volume: parseFloat(match[4]),
           symbol: match[5],
+          positionId: match[6],
+          ticketId: match[6],
           ticket: match[6],
           priceRequested: match[3].toUpperCase() === 'BUY' ? parseFloat(match[8]) : parseFloat(match[7]),
         },
       }),
+    },
+    // 7b. Opening market order request: [Trade] '905353': market sell 0.01 XAUUSD.p (4154.34 / 4154.69)
+    {
+      type: 'REQUEST' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+(?:(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\s+)?(?:\[\w+\]\s+)?)?(?:[\w\s.-]+?\s+)?'(\d+)':\s+market\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+\(([\d\.]+)\s*\/\s*([\d\.]+)\)/i,
+      parse: (match: RegExpMatchArray) => {
+        const action = match[3].toUpperCase() as 'BUY' | 'SELL';
+        const bid = parseFloat(match[6]);
+        const ask = parseFloat(match[7]);
+        const priceRequested = action === 'BUY' ? ask : bid;
+        return {
+          timestamp: parseTimestamp(match[1]),
+          login: match[2],
+          metadata: {
+            action,
+            volume: parseFloat(match[4]),
+            symbol: match[5],
+            priceRequested,
+            rawReason: `Market ${match[3]} requested at ${priceRequested} (${match[6]} / ${match[7]})`,
+          },
+        };
+      },
     },
     // 8. Direct submission (from broker desk perspective): [Trade] '1001': for '259713' buy 0.01 XAUUSD.r at 4257.04 (4256.97 / 4257.06)
     {
@@ -184,6 +292,8 @@ export class NormalizationEngine {
           volume: parseFloat(match[5]),
           symbol: match[6],
           priceRequested: parseFloat(match[7]),
+          positionId: match[8],
+          ticketId: match[8],
           ticket: match[8],
         },
       }),
@@ -201,7 +311,10 @@ export class NormalizationEngine {
           symbol: match[5],
           priceExecuted: parseFloat(match[6]),
           priceRequested: parseFloat(match[8]),
+          positionId: match[9] || undefined,
+          ticketId: match[9] || undefined,
           ticket: match[9] || undefined,
+          requestId: match[2],
         },
       }),
     },
@@ -214,6 +327,7 @@ export class NormalizationEngine {
         login: match[3],
         metadata: {
           orderId: match[4],
+          ticketId: match[4],
           action: match[5].toUpperCase() as 'BUY' | 'SELL',
           volume: parseFloat(match[6]),
           symbol: match[7],
@@ -224,12 +338,13 @@ export class NormalizationEngine {
     // 12. Real deal performed (Centroid/generic): [Trade] Centroid Gateway '910102': deal performed [#712 buy 0.01 XAUUSD.s at 4349.36]
     {
       type: 'DEAL_EXECUTED' as const,
-      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+(?:.*?\s+)?'(\d+)':\s+deal\s+performed\s+\[#(\d+)\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)\]/i,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+(?:(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\s+)?(?:\[\w+\]\s+)?)?(?:[\w\s.-]+?\s+)?'(\d+)':\s+deal\s+performed\s+\[#(\d+)\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)\]/i,
       parse: (match: RegExpMatchArray) => ({
         timestamp: parseTimestamp(match[1]),
         login: match[2],
         metadata: {
           dealId: match[3],
+          ticketId: match[3],
           action: match[4].toUpperCase() as 'BUY' | 'SELL',
           volume: parseFloat(match[5]),
           symbol: match[6],
@@ -240,16 +355,17 @@ export class NormalizationEngine {
     // 13. Real order performed: [Trade] Centroid Gateway '910102': order performed buy 0.01 at 4349.36 [#670 buy 0.01 XAUUSD.s at 4349.26]
     {
       type: 'EXECUTION_RESPONSE' as const,
-      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+(?:.*?\s+)?'(\d+)':\s+order\s+performed\s+(buy|sell)\s+([\d\.]+)\s+at\s+([\d\.]+)\s+\[#(\d+)\s+(?:buy|sell)\s+[\d\.]+\s+[\w\.-]+\s+at\s+([\d\.]+)\]/i,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+(?:(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\s+)?(?:\[\w+\]\s+)?)?(?:[\w\s.-]+?\s+)?'(\d+)':\s+order\s+performed\s+(buy|sell)\s+([\d\.]+)\s+at\s+([\d\.]+)\s+\[#(\d+)\s+(?:buy|sell)\s+[\d\.]+\s+[\w\.-]+\s+at\s+(market|[\d\.]+)\]/i,
       parse: (match: RegExpMatchArray) => ({
         timestamp: parseTimestamp(match[1]),
         login: match[2],
         metadata: {
           orderId: match[6],
+          ticketId: match[6],
           action: match[3].toUpperCase() as 'BUY' | 'SELL',
           volume: parseFloat(match[4]),
           priceExecuted: parseFloat(match[5]),
-          priceRequested: parseFloat(match[7]),
+          priceRequested: match[7].toLowerCase() === 'market' ? null : parseFloat(match[7]),
         },
       }),
     },
@@ -281,10 +397,10 @@ export class NormalizationEngine {
     // 16. Routed: [Trade] 'login': request transferred to dealers
     {
       type: 'ROUTED' as const,
-      regex: /(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z)\s+\[Trade\]\s+'(\d+)':\s+request\s+transferred\s+to\s+dealers/i,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+(?:\[Trade\]\s+)?(?:'(\d+)':\s+)?request\s+transferred\s+to\s+dealers/i,
       parse: (match: RegExpMatchArray) => ({
-        timestamp: match[1],
-        login: match[2],
+        timestamp: parseTimestamp(match[1]),
+        login: match[2] || '',
         metadata: {},
       }),
     },
@@ -304,9 +420,44 @@ export class NormalizationEngine {
         },
       }),
     },
-    // 18. Dealer requote: [Dealer] dealer #ID rejected buy/sell volume symbol at price (requote price)
+    // 17b. Dealer execution request: [Trade] '1353': request from '905353' (market sell 0.01 XAUUSD.p)
+    {
+      type: 'EXECUTION_REQUEST' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+(?:(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\s+)?(?:\[\w+\]\s+)?)?(?:[\w\s.-]+?\s+)?'(\d+)':\s+request\s+from\s+'(\d+)'\s+\((?:market\s+)?(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)(?:,\s*close\s*#(\d+))?/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[3],
+        metadata: {
+          action: match[4].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[5]),
+          symbol: match[6],
+          ticketId: match[7] || undefined,
+          positionId: match[7] || undefined,
+          requestId: match[2],
+          dealerId: match[2],
+        },
+      }),
+    },
+    // 17c. Dealer confirm: [Trade] '1353': confirm sell 0.01 XAUUSD.p at 4154.34 for '905353'
     {
       type: 'EXECUTION_RESPONSE' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+(?:(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\s+)?(?:\[\w+\]\s+)?)?(?:[\w\s.-]+?\s+)?'(\d+)':\s+confirm\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)\s+for\s+'(\d+)'/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[7],
+        metadata: {
+          action: match[3].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[4]),
+          symbol: match[5],
+          priceExecuted: parseFloat(match[6]),
+          requestId: match[2],
+          dealerId: match[2],
+        },
+      }),
+    },
+    // 18. Dealer requote: [Dealer] dealer #ID rejected buy/sell volume symbol at price (requote price)
+    {
+      type: 'REQUOTED' as const,
       regex: /(\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z)\s+\[Dealer\]\s+dealer\s+#(\d+)\s+rejected\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)\s+\(requote\s+([\d\.]+)\)/i,
       parse: (match: RegExpMatchArray) => ({
         timestamp: match[1],
@@ -341,6 +492,8 @@ export class NormalizationEngine {
         timestamp: match[1],
         login: match[2],
         metadata: {
+          dealId: match[3],
+          ticketId: match[3],
           ticket: match[3],
           action: match[4].toUpperCase() as 'BUY' | 'SELL',
           volume: parseFloat(match[5]),
@@ -349,17 +502,23 @@ export class NormalizationEngine {
         },
       }),
     },
-    // 21. Standard order rejection: [Trade] 'login': request rejected: reason
+    // 21. Standard order/request rejection: [Trade] 'login': request rejected: reason or Centroid Gateway 'login': order [#ID] rejected due to reason
     {
       type: 'ORDER_REJECTED' as const,
-      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+request\s+rejected:\s+(.+)/i,
-      parse: (match: RegExpMatchArray) => ({
-        timestamp: parseTimestamp(match[1]),
-        login: match[2],
-        metadata: {
-          rawReason: match[3].trim(),
-        },
-      }),
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+(?:(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\s+)?(?:\[\w+\]\s+)?)?(?:[\w\s.-]+?\s+)?'(\d+)':\s+(?:order\s+\[#(\d+)\]\s+rejected(?:\s+due\s+to\s+(.+))?|request\s+rejected:\s+(.+))/i,
+      parse: (match: RegExpMatchArray) => {
+        const orderId = match[3] || undefined;
+        const reason = (match[4] || match[5] || '').trim();
+        return {
+          timestamp: parseTimestamp(match[1]),
+          login: match[2],
+          metadata: {
+            orderId,
+            ticketId: orderId,
+            rawReason: reason || 'Request rejected',
+          },
+        };
+      },
     },
     // 22. Dealer rejected request: [Dealer] dealer #ID rejected buy/sell volume symbol at price (rejection)
     {
@@ -387,6 +546,7 @@ export class NormalizationEngine {
         login: match[2],
         metadata: {
           orderId: match[3],
+          ticketId: match[3],
           action: match[4].toUpperCase() as 'BUY' | 'SELL',
           volume: parseFloat(match[5]),
           symbol: match[6],
@@ -424,6 +584,7 @@ export class NormalizationEngine {
           priceRequested: parseFloat(match[8]),
           rejectedBy: `Dealer/Server #${match[2]}`,
           rawReason: match[3].trim(),
+          requestId: match[2],
         },
       }),
     },
@@ -452,6 +613,7 @@ export class NormalizationEngine {
         timestamp: parseTimestamp(match[1]),
         login: match[2],
         metadata: {
+          ticketId: match[3],
           ticket: match[3],
           action: match[4].toUpperCase() as 'BUY' | 'SELL',
           volume: parseFloat(match[5]),
@@ -468,11 +630,13 @@ export class NormalizationEngine {
         timestamp: parseTimestamp(match[1]),
         login: match[3],
         metadata: {
+          ticketId: match[4],
           ticket: match[4],
           action: match[5].toUpperCase() as 'BUY' | 'SELL',
           volume: parseFloat(match[6]),
           symbol: match[7],
           rawReason: `Requested modification: SL ${match[8]}, TP ${match[9]}`,
+          requestId: match[2],
         },
       }),
     },
@@ -484,27 +648,32 @@ export class NormalizationEngine {
         timestamp: parseTimestamp(match[1]),
         login: match[3],
         metadata: {
+          ticketId: match[4],
           ticket: match[4],
           action: match[5].toUpperCase() as 'BUY' | 'SELL',
           volume: parseFloat(match[6]),
           symbol: match[7],
           rawReason: `Server confirmed modification: SL ${match[8]}, TP ${match[9]}`,
+          requestId: match[2],
         },
       }),
     },
     // 30. Position modified: [Trade] '1375': position modified [#3381804 buy 0.01 XAUUSD.rcnt 4425.36 tp: 4425.86], time 0.49 ms
+    // or Gateway: Centroid Gateway '70038': position modified [#1442633 buy 0.1 XAUUSD.V sl: 4190.00 tp: 4250.00]
     {
-      type: 'DEAL_EXECUTED' as const,
-      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+position\s+modified\s+\[#(\d+)\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+([\d\.]+)(?:\s+sl:\s+([\d\.]+))?(?:\s+tp:\s+([\d\.]+))?\]/i,
+      type: 'EXECUTION_RESPONSE' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+(?:(?:\d{1,3}\.\d{1,3}\.\d{1,3}\.\d{1,3}(?::\d+)?\s+)?(?:\[\w+\]\s+)?)?(?:[\w\s.-]+?\s+)?'(\d+)':\s+position\s+modified\s+\[#(\d+)\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)(?:\s+([\d\.]+))?(?:\s+sl:\s+([\d\.]+))?(?:\s+tp:\s+([\d\.]+))?\]/i,
       parse: (match: RegExpMatchArray) => ({
         timestamp: parseTimestamp(match[1]),
         login: match[2],
         metadata: {
+          positionId: match[3],
+          ticketId: match[3],
           ticket: match[3],
           action: match[4].toUpperCase() as 'BUY' | 'SELL',
           volume: parseFloat(match[5]),
           symbol: match[6],
-          rawReason: `Position modified at ${match[7]}${match[8] ? `, SL ${match[8]}` : ''}${match[9] ? `, TP ${match[9]}` : ''}`,
+          rawReason: `Position modified${match[7] ? ` at ${match[7]}` : ''}${match[8] ? `, SL ${match[8]}` : ''}${match[9] ? `, TP ${match[9]}` : ''}`,
         },
       }),
     },
@@ -516,12 +685,83 @@ export class NormalizationEngine {
         timestamp: parseTimestamp(match[1]),
         login: match[2],
         metadata: {
+          ticketId: match[4],
           ticket: match[4],
           action: match[5].toUpperCase() as 'BUY' | 'SELL',
           volume: parseFloat(match[6]),
           symbol: match[7],
           rule: match[3],
           rawReason: `Modification confirmed via rule '${match[3]}': SL ${match[8]}, TP ${match[9]}`,
+          requestId: match[2],
+        },
+      }),
+    },
+    // 32. Execution request received (from dealer/bridge perspective): [Trade] '1085': request from '259713' (for '259713' sell 0.01 XAUUSD.p at 4382.81, close #7100172)
+    {
+      type: 'EXECUTION_REQUEST' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+\[Trade\]\s+'(\d+)':\s+request\s+from\s+'(\d+)'\s+\(for\s+'\d+'\s+(buy|sell)\s+([\d\.]+)\s+([\w\.-]+)\s+at\s+([\d\.]+)(?:,\s+close\s+#(\d+))?\)/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: match[3],
+        metadata: {
+          action: match[4].toUpperCase() as 'BUY' | 'SELL',
+          volume: parseFloat(match[5]),
+          symbol: match[6],
+          priceRequested: parseFloat(match[7]),
+          positionId: match[8] || undefined,
+          ticketId: match[8] || undefined,
+          ticket: match[8] || undefined,
+          requestId: match[2],
+        },
+      }),
+    },
+    // 33. Client BUY/SELL Request: Client BUY request Requested price: 4383.21
+    {
+      type: 'REQUEST' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+Client\s+(BUY|SELL)\s+request\s+Requested\s+price:\s+([\d\.]+)/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: '',
+        metadata: {
+          action: match[2].toUpperCase() as 'BUY' | 'SELL',
+          priceRequested: parseFloat(match[3]),
+        },
+      }),
+    },
+    // 34. Dealer request received
+    {
+      type: 'EXECUTION_REQUEST' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+Dealer\s+request\s+received/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: '',
+        metadata: {},
+      }),
+    },
+    // 35. Dealer confirms BUY/SELL: Dealer confirms BUY at 4383.25
+    {
+      type: 'EXECUTION_RESPONSE' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+Dealer\s+confirms\s+(BUY|SELL)\s+at\s+([\d\.]+)/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: '',
+        metadata: {
+          action: match[2].toUpperCase() as 'BUY' | 'SELL',
+          priceExecuted: parseFloat(match[3]),
+        },
+      }),
+    },
+    // 36. Deal performed Deal ID: 6903295
+    {
+      type: 'DEAL_EXECUTED' as const,
+      regex: /(\d{4}[-\.]\d{2}[-\.]\d{2}[T\s]\d{2}:\d{2}:\d{2}(?:\.\d{3})?Z?)\s+Deal\s+performed\s+Deal\s+ID:\s+(\d+)/i,
+      parse: (match: RegExpMatchArray) => ({
+        timestamp: parseTimestamp(match[1]),
+        login: '',
+        metadata: {
+          dealId: match[2],
+          ticketId: match[2],
+          ticket: match[2],
         },
       }),
     },
@@ -532,12 +772,26 @@ export class NormalizationEngine {
       const match = rawLine.match(pattern.regex);
       if (match) {
         const parsed = pattern.parse(match);
+        const metadata: NormalizedEvent['metadata'] = parsed.metadata || {};
+        if (metadata.ticket && !metadata.ticketId) {
+          metadata.ticketId = metadata.ticket;
+        }
+        if (metadata.ticketId && !metadata.ticket) {
+          metadata.ticket = metadata.ticketId;
+        }
+        
+        const tsObj = parseFullTimestamp(match[1]);
+
         return {
-          timestamp: parsed.timestamp,
+          timestamp: tsObj.timestamp,
+          timestampRaw: tsObj.timestampRaw,
+          timestampServer: tsObj.timestampServer,
+          timestampUtc: tsObj.timestampUtc,
+          timezoneSource: tsObj.timezoneSource,
           eventType: pattern.type,
           rawMessage: rawLine,
           login: parsed.login,
-          metadata: parsed.metadata,
+          metadata: metadata,
         };
       }
     }

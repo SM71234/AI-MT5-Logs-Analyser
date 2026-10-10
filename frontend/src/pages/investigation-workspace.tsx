@@ -5,7 +5,8 @@ import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { 
   ArrowLeft, Database, User, Calendar, Activity, 
   Clock, AlertTriangle, MessageSquare, 
-  Send, Plus, FileText, CheckCircle, HelpCircle, XCircle
+  Send, Plus, FileText, CheckCircle, XCircle,
+  TrendingUp, AlertCircle
 } from 'lucide-react';
 
 interface Note {
@@ -131,6 +132,26 @@ export default function InvestigationWorkspacePage() {
     },
   });
 
+  const getSuggestedQuestions = () => {
+    const isRejected = metrics?.canonicalResult?.status === 'REJECTED';
+    if (isRejected) {
+      return [
+        'Why was this trade rejected?',
+        'What happened between request and execution?',
+        'How long did the dealer take?',
+        'Show me the trade lifecycle.',
+      ];
+    } else {
+      return [
+        'Why did this trade get this slippage?',
+        'What happened between request and execution?',
+        'How long did the dealer take?',
+        'What price was requested vs executed?',
+        'Show me the trade lifecycle.',
+      ];
+    }
+  };
+
   const handleNoteSubmit = (e: React.FormEvent) => {
     e.preventDefault();
     if (!noteContent.trim()) return;
@@ -213,6 +234,26 @@ export default function InvestigationWorkspacePage() {
           <span>Case Created: {new Date(caseFile.createdAt).toLocaleDateString()}</span>
         </div>
       </header>
+
+      {/* Top Action Bar */}
+      <div className="border-b border-zinc-900 bg-zinc-950/20 px-6 py-3 flex items-center justify-between shrink-0">
+        <div className="text-xs font-semibold text-zinc-400 uppercase tracking-wider">
+          Trade Investigation
+        </div>
+        <button
+          onClick={() => analyzeMutation.mutate()}
+          disabled={analyzeMutation.isPending}
+          className="rounded-lg px-4 py-2 text-xs font-semibold transition bg-zinc-100 text-zinc-950 hover:bg-zinc-200 active:bg-zinc-300 disabled:opacity-50 disabled:cursor-not-allowed"
+        >
+          {analyzeMutation.isPending
+            ? 'Generating Investigation...'
+            : analyzeMutation.isError
+            ? 'Retry AI Audit Report'
+            : latestAiReport
+            ? 'Regenerate AI Audit Report'
+            : 'Generate AI Audit Report'}
+        </button>
+      </div>
 
       {/* Recalculation Stale Warning Banner */}
       {caseFile.recalculationFailed && (
@@ -473,7 +514,6 @@ export default function InvestigationWorkspacePage() {
             </div>
           </div>
         )}
-
         {/* Tab 2: Calculated Metrics */}
         {activeTab === 'metrics' && (() => {
           if (!metrics) {
@@ -483,11 +523,194 @@ export default function InvestigationWorkspacePage() {
               </div>
             );
           }
-          const entry = metrics.entry !== undefined ? metrics.entry : metrics;
-          const exit = metrics.exit !== undefined ? metrics.exit : null;
-          const summary = metrics.summary !== undefined ? metrics.summary : {
-            netAdversePriceImpact: metrics.slippagePips > 0 ? metrics.slippagePips : 0,
-            cumulativeLatencyMs: metrics.executionLatencyMs
+           const entryLegs = metrics.entries || (metrics.entry ? [metrics.entry] : (metrics.priceRequested !== undefined ? [metrics] : []));
+           const exitLegs = metrics.exits || (metrics.exit ? [metrics.exit] : []);
+           const reversalLegs = metrics.reversals || [];
+           const entry = entryLegs[0] || null;
+           const exit = exitLegs[exitLegs.length - 1] || null;
+           const summary = metrics.summary !== undefined ? metrics.summary : {
+            netSlippage: {
+              slippagePoints: metrics.slippagePoints,
+              slippageType: metrics.slippageType
+            },
+            cumulativeLatency: metrics.totalObservableExecutionTimeMs,
+            holdTimeMs: metrics.holdTimeMs
+          };
+
+          const renderLegCard = (leg: any, title: string, defaultSide?: string) => {
+            const side = leg.action || defaultSide || 'UNKNOWN';
+            const precision = leg.digits !== null && leg.digits !== undefined ? leg.digits : 5;
+            
+            const formatPrice = (val: any) => {
+              if (val === null || val === undefined) return 'NOT OBSERVABLE';
+              return typeof val === 'number' ? val.toFixed(precision) : val;
+            };
+
+            const formatValue = (val: any, suffix = '') => {
+              if (val === null || val === undefined) return 'NOT OBSERVABLE';
+              return `${val}${suffix}`;
+            };
+
+            return (
+              <div className="rounded-xl border border-zinc-900 bg-zinc-900/10 p-6 space-y-4">
+                <div className="flex items-center gap-2 border-b border-zinc-900 pb-3">
+                  <Clock className="h-4.5 w-4.5 text-zinc-400" />
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-300">{title}</h4>
+                </div>
+
+                <div className="grid grid-cols-2 gap-4 text-xs font-mono">
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Side</span>
+                    <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold mt-1 ${
+                      side === 'BUY'
+                        ? 'bg-emerald-950/30 text-emerald-400 border border-emerald-950/50'
+                        : 'bg-red-950/30 text-red-400 border border-red-950/50'
+                    }`}>
+                      {side}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Volume</span>
+                    <span className="text-zinc-300 font-semibold mt-1 block">
+                      {formatValue(leg.volume, ' Lot')}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Requested Price</span>
+                    <span className="text-zinc-300 font-semibold mt-1 block">
+                      {formatPrice(leg.priceRequested)}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Executed Price</span>
+                    <span className="text-zinc-100 font-semibold mt-1 block">
+                      {formatPrice(leg.priceExecuted)}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Raw Difference</span>
+                    <span className={`font-semibold mt-1 block ${
+                      leg.priceDelta > 0 ? 'text-amber-400' : leg.priceDelta < 0 ? 'text-emerald-400' : 'text-zinc-500'
+                    }`}>
+                      {leg.priceDelta !== null && leg.priceDelta !== undefined ? (leg.priceDelta > 0 ? `+${leg.priceDelta.toFixed(precision)}` : leg.priceDelta.toFixed(precision)) : 'NOT OBSERVABLE'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Point Size</span>
+                    <span className="text-zinc-400 mt-1 block">
+                      {leg.pointSize !== null && leg.pointSize !== undefined ? `${leg.pointSize} (${leg.pointSizeSource || 'MT5_SERVER'})` : 'NOT OBSERVABLE'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Slippage Points</span>
+                    {leg.slippagePoints !== null && leg.slippagePoints !== undefined ? (
+                      <span className={`font-bold mt-1 block ${
+                        leg.slippageType === 'Adverse' 
+                          ? 'text-red-400' 
+                          : leg.slippageType === 'Favorable' 
+                          ? 'text-emerald-400' 
+                          : 'text-zinc-500'
+                      }`}>
+                        {leg.slippagePoints} points
+                      </span>
+                    ) : (
+                      <span className="text-red-450/80 mt-1 block italic text-[10px]">NOT OBSERVABLE</span>
+                    )}
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Classification</span>
+                    <span className={`font-semibold mt-1 block ${
+                      leg.slippageType === 'Adverse' 
+                        ? 'text-red-400' 
+                        : leg.slippageType === 'Favorable' 
+                        ? 'text-emerald-400' 
+                        : 'text-zinc-500'
+                    }`}>
+                      {leg.slippageType || 'NOT OBSERVABLE'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Total Observable Execution Time</span>
+                    <span className="text-zinc-100 font-semibold mt-1 block">
+                      {formatValue(leg.totalObservableExecutionTimeMs, ' ms')}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Routing Delay</span>
+                    <span className="text-zinc-300 font-semibold mt-1 block">
+                      {formatValue(leg.routingDelayMs, ' ms')}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Execution Request Delay</span>
+                    <span className="text-zinc-300 font-semibold mt-1 block">
+                      {formatValue(leg.executionRequestDelayMs, ' ms')}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Execution Processing</span>
+                    <span className="text-zinc-300 font-semibold mt-1 block">
+                      {formatValue(leg.executionProcessingMs, ' ms')}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Dealer/Bridge Response Time</span>
+                    <span className="text-zinc-300 font-semibold mt-1 block">
+                      {formatValue(leg.dealerBridgeResponseTimeMs, ' ms')}
+                    </span>
+                  </div>
+
+                  {leg.pendingWaitingTimeMs !== null && leg.pendingWaitingTimeMs !== undefined && (
+                    <div>
+                      <span className="text-[10px] text-zinc-500 block">Pending Waiting Time</span>
+                      <span className="text-zinc-300 font-semibold mt-1 block">
+                        {leg.pendingWaitingTimeMs} ms
+                      </span>
+                    </div>
+                  )}
+
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Position ID</span>
+                    <span className="text-zinc-400 font-semibold mt-1 block">
+                      {leg.positionId || 'NOT OBSERVABLE'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Order ID</span>
+                    <span className="text-zinc-400 font-semibold mt-1 block">
+                      {leg.orderId || 'NOT OBSERVABLE'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Deal ID</span>
+                    <span className="text-zinc-450 font-semibold mt-1 block">
+                      {leg.dealId || 'NOT OBSERVABLE'}
+                    </span>
+                  </div>
+
+                  <div>
+                    <span className="text-[10px] text-zinc-500 block">Request ID</span>
+                    <span className="text-zinc-450 font-semibold mt-1 block">
+                      {leg.requestId || 'NOT OBSERVABLE'}
+                    </span>
+                  </div>
+                </div>
+              </div>
+            );
           };
 
           return (
@@ -497,265 +720,26 @@ export default function InvestigationWorkspacePage() {
                 <p className="text-xs text-zinc-500 mt-1">Calculated programmatically from raw server timeline logs.</p>
               </div>
 
-              {/* Side-by-Side Execution Breakdown */}
+              {/* Dynamic Execution Legs */}
               <div className="grid gap-6 md:grid-cols-2">
-                {/* Opening / Entry Card */}
-                <div className="rounded-xl border border-zinc-900 bg-zinc-900/10 p-6 space-y-4">
-                  <div className="flex items-center gap-2 border-b border-zinc-900 pb-3">
-                    <Clock className="h-4.5 w-4.5 text-zinc-400" />
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-300">Opening (Entry) Execution</h4>
-                  </div>
-
-                  <div className="grid grid-cols-2 gap-4 text-xs font-mono">
-                    <div>
-                      <span className="text-[10px] text-zinc-500 block">Side</span>
-                      <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold mt-1 ${
-                        caseFile.title.includes('BUY')
-                          ? 'bg-emerald-950/30 text-emerald-400 border border-emerald-950/50'
-                          : 'bg-red-950/30 text-red-400 border border-red-950/50'
-                      }`}>
-                        {caseFile.title.includes('BUY') ? 'BUY' : 'SELL'}
-                      </span>
-                    </div>
-
-                    <div>
-                      <span className="text-[10px] text-zinc-500 block">Requested Price</span>
-                      <span className="text-zinc-300 font-semibold mt-1 block">
-                        {entry.priceRequested !== undefined && entry.priceRequested !== null ? entry.priceRequested.toFixed(5) : 'N/A'}
-                      </span>
-                    </div>
-
-                    <div>
-                      <span className="text-[10px] text-zinc-500 block">Executed Price</span>
-                      <span className="text-zinc-100 font-semibold mt-1 block">
-                        {entry.priceExecuted !== undefined && entry.priceExecuted !== null ? entry.priceExecuted.toFixed(5) : 'N/A (Rejected)'}
-                      </span>
-                    </div>
-
-                    <div>
-                      <span className="text-[10px] text-zinc-500 block">Raw Difference</span>
-                      <span className={`font-semibold mt-1 block ${
-                        entry.priceDelta > 0 ? 'text-amber-400' : entry.priceDelta < 0 ? 'text-emerald-400' : 'text-zinc-500'
-                      }`}>
-                        {entry.priceExecuted !== null ? (entry.priceDelta > 0 ? `+${entry.priceDelta.toFixed(5)}` : entry.priceDelta?.toFixed(5)) : 'N/A'}
-                      </span>
-                    </div>
-
-                    <div>
-                      <span className="text-[10px] text-zinc-500 block">Point Size</span>
-                      <span className="text-zinc-400 mt-1 block">
-                        {entry.pointSize !== null && entry.pointSize !== undefined ? entry.pointSize : 'N/A'}
-                      </span>
-                    </div>
-
-                    <div>
-                      <span className="text-[10px] text-zinc-500 block">Slippage Points</span>
-                      {entry.slippagePoints !== null && entry.slippagePoints !== undefined ? (
-                        <span className={`font-bold mt-1 block ${
-                          entry.slippageType === 'Adverse' 
-                            ? 'text-red-400' 
-                            : entry.slippageType === 'Favorable' 
-                            ? 'text-emerald-400' 
-                            : 'text-zinc-500'
-                        }`}>
-                          {entry.slippagePoints} points
-                        </span>
-                      ) : (
-                        <span className="text-zinc-500 mt-1 block italic text-[10px]">N/A</span>
-                      )}
-                    </div>
-
-                    <div>
-                      <span className="text-[10px] text-zinc-500 block">Classification</span>
-                      <span className={`font-semibold mt-1 block ${
-                        entry.slippageType === 'Adverse' 
-                          ? 'text-red-400' 
-                          : entry.slippageType === 'Favorable' 
-                          ? 'text-emerald-400' 
-                          : 'text-zinc-500'
-                      }`}>
-                        {entry.slippageType || 'N/A'}
-                      </span>
-                    </div>
-
-                    <div>
-                      <span className="text-[10px] text-zinc-500 block">Total Observable Execution Time</span>
-                      <span className="text-zinc-100 font-semibold mt-1 block">
-                        {entry.totalObservableExecutionTimeMs !== null && entry.totalObservableExecutionTimeMs !== undefined ? `${entry.totalObservableExecutionTimeMs} ms` : 'N/A'}
-                      </span>
-                    </div>
-
-                    <div>
-                      <span className="text-[10px] text-zinc-500 block">Routing Delay</span>
-                      <span className="text-zinc-300 font-semibold mt-1 block">
-                        {entry.routingDelayMs !== null && entry.routingDelayMs !== undefined ? `${entry.routingDelayMs} ms` : 'N/A'}
-                      </span>
-                    </div>
-
-                    <div>
-                      <span className="text-[10px] text-zinc-500 block">Execution Request Delay</span>
-                      <span className="text-zinc-300 font-semibold mt-1 block">
-                        {entry.executionRequestDelayMs !== null && entry.executionRequestDelayMs !== undefined ? `${entry.executionRequestDelayMs} ms` : 'N/A'}
-                      </span>
-                    </div>
-
-                    <div>
-                      <span className="text-[10px] text-zinc-500 block">Execution Processing</span>
-                      <span className="text-zinc-300 font-semibold mt-1 block">
-                        {entry.executionProcessingMs !== null && entry.executionProcessingMs !== undefined ? `${entry.executionProcessingMs} ms` : 'N/A'}
-                      </span>
-                    </div>
-
-                    <div>
-                      <span className="text-[10px] text-zinc-500 block">Dealer/Bridge Response Time</span>
-                      <span className="text-zinc-300 font-semibold mt-1 block">
-                        {entry.dealerBridgeResponseTimeMs !== null && entry.dealerBridgeResponseTimeMs !== undefined ? `${entry.dealerBridgeResponseTimeMs} ms` : 'N/A'}
-                      </span>
-                    </div>
-
-                    {entry.pendingWaitingTimeMs !== null && entry.pendingWaitingTimeMs !== undefined && (
-                      <div>
-                        <span className="text-[10px] text-zinc-500 block">Pending Waiting Time</span>
-                        <span className="text-zinc-300 font-semibold mt-1 block">
-                          {entry.pendingWaitingTimeMs} ms
-                        </span>
-                      </div>
-                    )}
-                  </div>
-                </div>
-
-                {/* Closing / Exit Card */}
-                <div className="rounded-xl border border-zinc-900 bg-zinc-900/10 p-6 space-y-4">
-                  <div className="flex items-center gap-2 border-b border-zinc-900 pb-3">
-                    <Clock className="h-4.5 w-4.5 text-zinc-400" />
-                    <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-300">Closing (Exit) Execution</h4>
-                  </div>
-
-                  {exit ? (
-                    <div className="grid grid-cols-2 gap-4 text-xs font-mono">
-                      <div>
-                        <span className="text-[10px] text-zinc-500 block">Side</span>
-                        <span className={`inline-block rounded px-1.5 py-0.5 text-[10px] font-semibold mt-1 ${
-                          caseFile.title.includes('BUY')
-                            ? 'bg-red-950/30 text-red-400 border border-red-950/50'
-                            : 'bg-emerald-950/30 text-emerald-400 border border-emerald-950/50'
-                        }`}>
-                          {caseFile.title.includes('BUY') ? 'SELL' : 'BUY'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] text-zinc-500 block">Requested Price</span>
-                        <span className="text-zinc-300 font-semibold mt-1 block">
-                          {exit.priceRequested !== undefined && exit.priceRequested !== null ? exit.priceRequested.toFixed(5) : 'N/A'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] text-zinc-500 block">Executed Price</span>
-                        <span className="text-zinc-100 font-semibold mt-1 block">
-                          {exit.priceExecuted !== undefined && exit.priceExecuted !== null ? exit.priceExecuted.toFixed(5) : 'N/A'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] text-zinc-500 block">Raw Difference</span>
-                        <span className={`font-semibold mt-1 block ${
-                          exit.priceDelta > 0 ? 'text-amber-400' : exit.priceDelta < 0 ? 'text-emerald-400' : 'text-zinc-500'
-                        }`}>
-                          {exit.priceExecuted !== null ? (exit.priceDelta > 0 ? `+${exit.priceDelta.toFixed(5)}` : exit.priceDelta?.toFixed(5)) : 'N/A'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] text-zinc-500 block">Point Size</span>
-                        <span className="text-zinc-400 mt-1 block">
-                          {exit.pointSize !== null && exit.pointSize !== undefined ? exit.pointSize : 'N/A'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] text-zinc-500 block">Slippage Points</span>
-                        {exit.slippagePoints !== null && exit.slippagePoints !== undefined ? (
-                          <span className={`font-bold mt-1 block ${
-                            exit.slippageType === 'Adverse' 
-                              ? 'text-red-400' 
-                              : exit.slippageType === 'Favorable' 
-                              ? 'text-emerald-400' 
-                              : 'text-zinc-500'
-                          }`}>
-                            {exit.slippagePoints} points
-                          </span>
-                        ) : (
-                          <span className="text-zinc-500 mt-1 block italic text-[10px]">N/A</span>
-                        )}
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] text-zinc-500 block">Classification</span>
-                        <span className={`font-semibold mt-1 block ${
-                          exit.slippageType === 'Adverse' 
-                            ? 'text-red-400' 
-                            : exit.slippageType === 'Favorable' 
-                            ? 'text-emerald-400' 
-                            : 'text-zinc-500'
-                        }`}>
-                          {exit.slippageType || 'N/A'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] text-zinc-500 block">Total Observable Execution Time</span>
-                        <span className="text-zinc-100 font-semibold mt-1 block">
-                          {exit.totalObservableExecutionTimeMs !== null && exit.totalObservableExecutionTimeMs !== undefined ? `${exit.totalObservableExecutionTimeMs} ms` : 'N/A'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] text-zinc-500 block">Routing Delay</span>
-                        <span className="text-zinc-300 font-semibold mt-1 block">
-                          {exit.routingDelayMs !== null && exit.routingDelayMs !== undefined ? `${exit.routingDelayMs} ms` : 'N/A'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] text-zinc-500 block">Execution Request Delay</span>
-                        <span className="text-zinc-300 font-semibold mt-1 block">
-                          {exit.executionRequestDelayMs !== null && exit.executionRequestDelayMs !== undefined ? `${exit.executionRequestDelayMs} ms` : 'N/A'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] text-zinc-500 block">Execution Processing</span>
-                        <span className="text-zinc-300 font-semibold mt-1 block">
-                          {exit.executionProcessingMs !== null && exit.executionProcessingMs !== undefined ? `${exit.executionProcessingMs} ms` : 'N/A'}
-                        </span>
-                      </div>
-
-                      <div>
-                        <span className="text-[10px] text-zinc-500 block">Dealer/Bridge Response Time</span>
-                        <span className="text-zinc-300 font-semibold mt-1 block">
-                          {exit.dealerBridgeResponseTimeMs !== null && exit.dealerBridgeResponseTimeMs !== undefined ? `${exit.dealerBridgeResponseTimeMs} ms` : 'N/A'}
-                        </span>
-                      </div>
-
-                      {exit.pendingWaitingTimeMs !== null && exit.pendingWaitingTimeMs !== undefined && (
-                        <div>
-                          <span className="text-[10px] text-zinc-500 block">Pending Waiting Time</span>
-                          <span className="text-zinc-300 font-semibold mt-1 block">
-                            {exit.pendingWaitingTimeMs} ms
-                          </span>
-                        </div>
-                      )}
-                    </div>
-                  ) : (
-                    <div className="py-8 text-center text-zinc-500 italic text-xs">
-                      No exit execution data parsed (active open position or flat import history).
-                    </div>
-                  )}
-                </div>
+                {entryLegs.map((leg: any, idx: number) => 
+                  renderLegCard(leg, `Entry Leg #${idx + 1} (${leg.symbol || 'N/A'})`, 'BUY')
+                )}
+                {exitLegs.map((leg: any, idx: number) => 
+                  renderLegCard(leg, `Exit Leg #${idx + 1} (${leg.symbol || 'N/A'})`, 'SELL')
+                )}
+                {reversalLegs.map((leg: any, idx: number) => 
+                  renderLegCard(leg, `Reversal Leg #${idx + 1} (${leg.symbol || 'N/A'})`, 'BUY')
+                )}
               </div>
-              {entry.rejection?.isRejected ? (
+
+              {exitLegs.length === 0 && (
+                <div className="py-8 text-center text-zinc-500 italic text-xs rounded-xl border border-zinc-900 bg-zinc-900/10 p-6">
+                  No exit execution data parsed (active open position or flat import history).
+                </div>
+              )}
+
+              {entryLegs[0]?.rejection?.isRejected ? (
                 <div className="rounded-xl border border-red-950 bg-red-950/10 p-6 space-y-4">
                   <div className="flex items-center gap-2 border-b border-red-950 pb-3">
                     <AlertTriangle className="h-4.5 w-4.5 text-red-400" />
@@ -765,17 +749,17 @@ export default function InvestigationWorkspacePage() {
                     <div className="bg-red-950/20 border border-red-900/30 rounded-lg p-4">
                       <span className="text-[10px] text-red-400 block uppercase font-semibold">Rejection Reason</span>
                       <span className="text-lg font-bold text-red-200 mt-1 block">
-                        {entry.rejection.reason}
+                        {entryLegs[0].rejection.reason}
                       </span>
                       <span className="text-[9px] text-zinc-500 block mt-1">
-                        Raw log: "{entry.rejection.rawReason || 'N/A'}"
+                        Raw log: "{entryLegs[0].rejection.rawReason || 'NOT OBSERVABLE'}"
                       </span>
                     </div>
 
                     <div className="bg-red-950/20 border border-red-900/30 rounded-lg p-4">
                       <span className="text-[10px] text-red-400 block uppercase font-semibold">Rejected By</span>
                       <span className="text-lg font-bold text-red-200 mt-1 block">
-                        {entry.rejection.rejectedBy}
+                        {entryLegs[0].rejection.rejectedBy}
                       </span>
                       <span className="text-[9px] text-zinc-500 block mt-1">
                         System component or Desk
@@ -785,17 +769,17 @@ export default function InvestigationWorkspacePage() {
                     <div className="bg-red-950/20 border border-red-900/30 rounded-lg p-4">
                       <span className="text-[10px] text-red-400 block uppercase font-semibold">Failed Stage</span>
                       <span className="text-lg font-bold text-red-200 mt-1 block font-semibold text-red-400">
-                        {entry.rejection.failedStage}
+                        {entryLegs[0].rejection.failedStage}
                       </span>
                       <span className="text-[9px] text-zinc-500 block mt-1">
-                        Last successful: {entry.rejection.lastSuccessfulStage}
+                        Last successful: {entryLegs[0].rejection.lastSuccessfulStage}
                       </span>
                     </div>
                   </div>
                   <div className="text-xs text-zinc-400 bg-red-950/5 p-4 rounded-lg border border-red-950/30">
                     <p className="font-semibold text-red-300">Failure Explanation:</p>
                     <p className="mt-1 leading-relaxed">
-                      The client request successfully completed the <strong>{entry.rejection.lastSuccessfulStage}</strong> stage, but failed at <strong>{entry.rejection.failedStage}</strong> after being rejected by <strong>{entry.rejection.rejectedBy}</strong>. Deal execution did not occur, and no market position was created.
+                      The client request successfully completed the <strong>{entryLegs[0].rejection.lastSuccessfulStage}</strong> stage, but failed at <strong>{entryLegs[0].rejection.failedStage}</strong> after being rejected by <strong>{entryLegs[0].rejection.rejectedBy}</strong>. Deal execution did not occur, and no market position was created.
                     </p>
                   </div>
                 </div>
@@ -816,14 +800,16 @@ export default function InvestigationWorkspacePage() {
                           ? 'text-emerald-400' 
                           : 'text-zinc-400'
                       }`}>
-                        {summary.netSlippage?.slippagePoints ?? 0} points {summary.netSlippage?.slippageType || 'Zero'}
+                        {summary.netSlippage?.slippagePoints !== null && summary.netSlippage?.slippagePoints !== undefined
+                          ? `${summary.netSlippage.slippagePoints} points ${summary.netSlippage.slippageType}`
+                          : 'NOT OBSERVABLE'}
                       </span>
-                      <div className="text-[9px] text-zinc-500 space-y-0.5 mt-2 pt-2 border-t border-zinc-900/50">
-                        <div>Entry: {summary.entryExecution?.slippagePoints ?? 0} {summary.entryExecution?.slippageType === 'Adverse' ? 'Adverse' : summary.entryExecution?.slippageType === 'Favorable' ? 'Favorable' : 'Zero'}</div>
-                        {summary.exitExecution && (
+                      <div className="text-[9px] text-zinc-500 space-y-0.5 mt-2 pt-2 border-t border-zinc-900/50 font-mono">
+                        <div>Entry: {entryLegs[0]?.slippagePoints !== null && entryLegs[0]?.slippagePoints !== undefined ? `${entryLegs[0].slippagePoints} points ${entryLegs[0].slippageType}` : 'NOT OBSERVABLE'}</div>
+                        {exitLegs[0] && (
                           <>
-                            <div>Exit: {summary.exitExecution.slippagePoints} {summary.exitExecution.slippageType === 'Adverse' ? 'Adverse' : summary.exitExecution.slippageType === 'Favorable' ? 'Favorable' : 'Zero'}</div>
-                            <div className="text-amber-400/80 font-medium">Brokeree Applied: {summary.exitExecution.slippagePoints} points Adverse</div>
+                            <div>Exit: {exitLegs[0].slippagePoints !== null && exitLegs[0].slippagePoints !== undefined ? `${exitLegs[0].slippagePoints} points ${exitLegs[0].slippageType}` : 'NOT OBSERVABLE'}</div>
+                            <div className="text-amber-400/80 font-medium">Brokeree Applied: {exitLegs[0].slippagePoints !== null && exitLegs[0].slippagePoints !== undefined ? `${exitLegs[0].slippagePoints} points Adverse` : 'NOT OBSERVABLE'}</div>
                           </>
                         )}
                       </div>
@@ -834,12 +820,12 @@ export default function InvestigationWorkspacePage() {
                       <span className="text-xl font-bold text-zinc-100 mt-1 block font-mono">
                         {summary.cumulativeLatency !== undefined && summary.cumulativeLatency !== null 
                           ? `${summary.cumulativeLatency.toFixed(0)} ms` 
-                          : 'N/A'}
+                          : 'NOT OBSERVABLE'}
                       </span>
-                      <div className="text-[9px] text-zinc-500 space-y-0.5 mt-2 pt-2 border-t border-zinc-900/50">
-                        <div>Entry Time: {entry.totalObservableExecutionTimeMs !== null && entry.totalObservableExecutionTimeMs !== undefined ? `${entry.totalObservableExecutionTimeMs.toFixed(0)} ms` : 'N/A'}</div>
-                        {exit && (
-                          <div>Exit Time: {exit.totalObservableExecutionTimeMs !== null && exit.totalObservableExecutionTimeMs !== undefined ? `${exit.totalObservableExecutionTimeMs.toFixed(0)} ms` : 'N/A'}</div>
+                      <div className="text-[9px] text-zinc-500 space-y-0.5 mt-2 pt-2 border-t border-zinc-900/50 font-mono">
+                        <div>Entry Time: {entryLegs[0]?.totalObservableExecutionTimeMs !== null && entryLegs[0]?.totalObservableExecutionTimeMs !== undefined ? `${entryLegs[0].totalObservableExecutionTimeMs.toFixed(0)} ms` : 'NOT OBSERVABLE'}</div>
+                        {exitLegs[0] && (
+                          <div>Exit Time: {exitLegs[0].totalObservableExecutionTimeMs !== null && exitLegs[0].totalObservableExecutionTimeMs !== undefined ? `${exitLegs[0].totalObservableExecutionTimeMs.toFixed(0)} ms` : 'NOT OBSERVABLE'}</div>
                         )}
                       </div>
                     </div>
@@ -849,7 +835,7 @@ export default function InvestigationWorkspacePage() {
                       <div className="text-[10px] text-zinc-300 space-y-1.5 mt-2 font-mono">
                         <div>Hold Time: <span className="font-semibold text-zinc-100">{(() => {
                           const ms = summary.holdTimeMs;
-                          if (ms === null || ms === undefined) return 'N/A';
+                          if (ms === null || ms === undefined) return 'NOT OBSERVABLE';
                           if (ms < 1000) return `${ms} ms`;
                           const totalSec = Math.round(ms / 1000);
                           if (totalSec < 60) return `${(ms / 1000).toFixed(1)}s`;
@@ -862,13 +848,71 @@ export default function InvestigationWorkspacePage() {
                           const remainingMinutes = minutes % 60;
                           return `${hours}h ${remainingMinutes}m ${seconds}s`;
                         })()}</span></div>
-                        <div>Reason: <span className="font-semibold text-zinc-100">{entry.executionReason || 'MARKET'}</span></div>
-                        <div>Type: <span className="font-semibold text-zinc-100">{entry.orderType || 'MARKET'}</span></div>
+                        <div>Reason: <span className="font-semibold text-zinc-100">{entryLegs[0]?.executionReason || 'NOT OBSERVABLE'}</span></div>
+                        <div>Type: <span className="font-semibold text-zinc-100">{entryLegs[0]?.orderType || 'NOT OBSERVABLE'}</span></div>
                       </div>
                     </div>
                   </div>
                 </div>
               )}
+
+              {/* Data Quality & Integrity Summary */}
+              <div className="rounded-xl border border-zinc-900 bg-zinc-900/10 p-6 space-y-4">
+                <div className="flex items-center gap-2 border-b border-zinc-900 pb-3">
+                  <Activity className="h-4.5 w-4.5 text-zinc-400" />
+                  <h4 className="text-xs font-bold uppercase tracking-wider text-zinc-300">Data Quality & Integrity Summary</h4>
+                </div>
+                <div className="grid gap-4 sm:grid-cols-3 text-xs font-mono">
+                  <div className="bg-zinc-950/25 border border-zinc-900/50 rounded-lg p-3">
+                    <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Correlation</span>
+                    <span className={`text-xs font-bold mt-1 block ${
+                      metrics.correlationQuality === 'KNOWN' || (!metrics.correlationQuality) ? 'text-emerald-400' : 'text-amber-400'
+                    }`}>
+                      {metrics.correlationQuality || (entryLegs[0]?.correlationMethod === 'PROXIMITY_FALLBACK' ? 'AMBIGUOUS' : 'KNOWN')}
+                    </span>
+                  </div>
+                  <div className="bg-zinc-950/25 border border-zinc-900/50 rounded-lg p-3">
+                    <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Timing</span>
+                    <span className={`text-xs font-bold mt-1 block ${
+                      (metrics.timingQuality || 'KNOWN') === 'KNOWN' ? 'text-emerald-400' : 'text-amber-400'
+                    }`}>
+                      {metrics.timingQuality || 'KNOWN'}
+                    </span>
+                  </div>
+                  <div className="bg-zinc-950/25 border border-zinc-900/50 rounded-lg p-3">
+                    <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Execution</span>
+                    <span className={`text-xs font-bold mt-1 block ${
+                      (metrics.executionQuality || 'KNOWN') === 'KNOWN' ? 'text-emerald-400' : 'text-amber-400'
+                    }`}>
+                      {metrics.executionQuality || 'KNOWN'}
+                    </span>
+                  </div>
+                  <div className="bg-zinc-950/25 border border-zinc-900/50 rounded-lg p-3">
+                    <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Timezone</span>
+                    <span className={`text-xs font-bold mt-1 block ${
+                      (metrics.timezoneQuality || 'KNOWN') === 'KNOWN' ? 'text-emerald-400' : 'text-amber-400'
+                    }`}>
+                      {metrics.timezoneQuality || 'KNOWN'}
+                    </span>
+                  </div>
+                  <div className="bg-zinc-950/25 border border-zinc-900/50 rounded-lg p-3">
+                    <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Position Lifecycle</span>
+                    <span className={`text-xs font-bold mt-1 block ${
+                      exitLegs.length > 0 ? 'text-emerald-400' : 'text-amber-400'
+                    }`}>
+                      {entryLegs[0]?.rejection?.isRejected ? 'NOT_OBSERVABLE' : (exitLegs.length > 0 ? 'COMPLETE' : 'INCOMPLETE')}
+                    </span>
+                  </div>
+                  <div className="bg-zinc-950/25 border border-zinc-900/50 rounded-lg p-3">
+                    <span className="text-[10px] text-zinc-500 block uppercase font-semibold">Financial Data</span>
+                    <span className={`text-xs font-bold mt-1 block ${
+                      exitLegs.length > 0 ? 'text-emerald-400' : 'text-amber-400'
+                    }`}>
+                      {entryLegs[0]?.rejection?.isRejected ? 'NOT_OBSERVABLE' : (exitLegs.length > 0 ? 'COMPLETE' : 'INCOMPLETE')}
+                    </span>
+                  </div>
+                </div>
+              </div>
 
               {/* Quality Summary banner */}
               {entry.rejection?.isRejected ? (
@@ -928,32 +972,335 @@ export default function InvestigationWorkspacePage() {
                   <button
                     onClick={() => analyzeMutation.mutate()}
                     disabled={analyzeMutation.isPending}
-                    className="rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-1.5 text-[10px] font-semibold text-zinc-300 hover:text-zinc-150 hover:bg-zinc-850 active:bg-zinc-900 transition"
+                    className="rounded-lg bg-zinc-900 border border-zinc-800 px-3 py-1.5 text-[10px] font-semibold text-zinc-300 hover:text-zinc-150 hover:bg-zinc-850 active:bg-zinc-900 transition animate-fade-in"
                   >
-                    {analyzeMutation.isPending ? 'Regenerating...' : 'Regenerate'}
+                    {analyzeMutation.isPending ? 'Generating Investigation...' : 'Regenerate AI Audit Report'}
                   </button>
                 )}
               </div>
+ 
+              {latestAiReport ? (() => {
+                let parsed: any = null;
+                try {
+                  parsed = JSON.parse(latestAiReport.response);
+                } catch (e) {
+                  // Legacy/markdown fallback
+                }
 
-              {latestAiReport ? (
-                <div className="text-xs text-zinc-300 leading-relaxed font-sans space-y-4 whitespace-pre-wrap">
-                  {latestAiReport.response}
-                </div>
-              ) : (
-                <div className="py-12 text-center space-y-4">
-                  <HelpCircle className="mx-auto h-8 w-8 text-zinc-700" />
-                  <div>
-                    <h4 className="text-xs font-semibold text-zinc-300">AI Report not generated yet</h4>
-                    <p className="text-[10px] text-zinc-500 mt-1 max-w-sm mx-auto">
-                      Invoke the AI operations assistant to generate a structured timeline investigation.
+                if (!parsed) {
+                  return (
+                    <div className="text-xs text-zinc-300 leading-relaxed font-sans space-y-4 whitespace-pre-wrap text-left">
+                      {latestAiReport.response}
+                    </div>
+                  );
+                }
+
+                const status = parsed.outcome?.status || parsed.outcome || 'UNKNOWN';
+                const confidence = parsed.outcome?.confidence || 'UNKNOWN';
+                const executiveSummary = parsed.executiveSummary || parsed.summary || '';
+                const whatHappened = parsed.whatHappened || [];
+                const executionAnalysis = parsed.executionAnalysis || {};
+                const slippageAnalysis = parsed.slippageAnalysis || {};
+                const timingAnalysis = parsed.timingAnalysis || {};
+                const positionLifecycle = parsed.positionLifecycle || parsed.lifecycleAnalysis || [];
+                const rejectionAnalysis = parsed.rejectionAnalysis || null;
+                const anomalies = parsed.anomalies || [];
+                const evidence = parsed.evidence || [];
+                const limitations = parsed.limitations || [];
+
+                const getOutcomeBadgeClass = (s: string) => {
+                  switch (s) {
+                    case 'SUCCESSFUL':
+                    case 'CLOSED':
+                      return 'bg-emerald-950/30 text-emerald-400 border-emerald-950/60';
+                    case 'REJECTED':
+                      return 'bg-red-950/30 text-red-400 border-red-950/60';
+                    case 'REQUOTED_THEN_EXECUTED':
+                    case 'PARTIALLY_EXECUTED':
+                    case 'REVERSED':
+                    case 'OPEN':
+                      return 'bg-amber-950/30 text-amber-400 border-amber-950/60';
+                    default:
+                      return 'bg-zinc-900/40 border-zinc-850 text-zinc-400';
+                  }
+                };
+
+                const renderWhatHappened = () => {
+                  if (Array.isArray(whatHappened)) {
+                    return (
+                      <ul className="list-disc list-inside space-y-1.5 pl-1.5 text-zinc-300">
+                        {whatHappened.map((step: string, idx: number) => (
+                          <li key={idx} className="leading-relaxed text-[11px]">{step}</li>
+                        ))}
+                      </ul>
+                    );
+                  }
+                  return <p className="leading-relaxed whitespace-pre-line text-[11px]">{whatHappened}</p>;
+                };
+
+                const renderExecutionAnalysis = () => {
+                  if (typeof executionAnalysis === 'string') {
+                    return <p className="leading-relaxed whitespace-pre-line text-[11px]">{executionAnalysis}</p>;
+                  }
+                  return (
+                    <div className="space-y-3 font-mono text-[10px]">
+                      {executionAnalysis.entry && (
+                        <div>
+                          <span className="font-semibold text-zinc-500 uppercase text-[9px] block mb-0.5">Entry Execution</span>
+                          <p className="text-zinc-300 bg-zinc-950/40 border border-zinc-900 rounded px-2.5 py-1.5 leading-relaxed">{executionAnalysis.entry}</p>
+                        </div>
+                      )}
+                      {executionAnalysis.exit && executionAnalysis.exit !== 'NOT_OBSERVABLE' && (
+                        <div>
+                          <span className="font-semibold text-zinc-500 uppercase text-[9px] block mb-0.5">Exit Execution</span>
+                          <p className="text-zinc-300 bg-zinc-950/40 border border-zinc-900 rounded px-2.5 py-1.5 leading-relaxed">{executionAnalysis.exit}</p>
+                        </div>
+                      )}
+                      {executionAnalysis.reversal && executionAnalysis.reversal !== 'NOT_OBSERVABLE' && (
+                        <div>
+                          <span className="font-semibold text-zinc-500 uppercase text-[9px] block mb-0.5">Reversal / Other Leg</span>
+                          <p className="text-zinc-300 bg-zinc-950/40 border border-zinc-900 rounded px-2.5 py-1.5 leading-relaxed">{executionAnalysis.reversal}</p>
+                        </div>
+                      )}
+                    </div>
+                  );
+                };
+
+                const renderSlippageAnalysis = () => {
+                  if (typeof slippageAnalysis === 'string') {
+                    return <p className="leading-relaxed whitespace-pre-line text-[11px]">{slippageAnalysis}</p>;
+                  }
+                  return (
+                    <div className="space-y-4 text-[11px]">
+                      <p className="leading-relaxed">{slippageAnalysis.summary}</p>
+                      {slippageAnalysis.legs && slippageAnalysis.legs.length > 0 && (
+                        <div className="overflow-x-auto border border-zinc-900 rounded-lg">
+                          <table className="w-full text-left text-[10px] font-mono border-collapse divide-y divide-zinc-900">
+                            <thead>
+                              <tr className="bg-zinc-950/40 text-zinc-500 font-semibold">
+                                <th className="p-2">Leg</th>
+                                <th className="p-2 text-right">Requested</th>
+                                <th className="p-2 text-right">Executed</th>
+                                <th className="p-2 text-right">Slippage</th>
+                                <th className="p-2">Type</th>
+                              </tr>
+                            </thead>
+                            <tbody className="divide-y divide-zinc-900/50">
+                              {slippageAnalysis.legs.map((leg: any, idx: number) => (
+                                <tr key={idx} className="hover:bg-zinc-900/20 transition">
+                                  <td className="p-2 font-bold text-zinc-400">{leg.leg}</td>
+                                  <td className="p-2 text-right text-zinc-300">{leg.requestedPrice}</td>
+                                  <td className="p-2 text-right text-zinc-300">{leg.executedPrice}</td>
+                                  <td className="p-2 text-right text-zinc-300">{leg.slippagePoints} pts</td>
+                                  <td className={`p-2 font-bold ${
+                                    leg.classification === 'ADVERSE' ? 'text-red-400' : leg.classification === 'FAVORABLE' ? 'text-emerald-400' : 'text-zinc-500'
+                                  }`}>{leg.classification}</td>
+                                </tr>
+                              ))}
+                            </tbody>
+                          </table>
+                        </div>
+                      )}
+                      {slippageAnalysis.tradeLevelConclusion && slippageAnalysis.tradeLevelConclusion !== 'NOT_OBSERVABLE' && (
+                        <p className="border-t border-zinc-900 pt-2 font-semibold text-zinc-200">{slippageAnalysis.tradeLevelConclusion}</p>
+                      )}
+                    </div>
+                  );
+                };
+
+                const renderTimingAnalysis = () => {
+                  if (typeof timingAnalysis === 'string') {
+                    return <p className="leading-relaxed whitespace-pre-line text-[11px]">{timingAnalysis}</p>;
+                  }
+                  return (
+                    <div className="space-y-4 text-[11px]">
+                      <p className="leading-relaxed">{timingAnalysis.summary}</p>
+                      <div className="grid gap-3 sm:grid-cols-2 text-[10px] font-mono">
+                        <div className="bg-zinc-950/30 border border-zinc-900 rounded p-2.5">
+                          <span className="text-zinc-500 block mb-0.5 uppercase text-[9px] font-semibold">Routing Delay</span>
+                          <span className="text-zinc-300 font-semibold">{timingAnalysis.routingDelay}</span>
+                        </div>
+                        <div className="bg-zinc-950/30 border border-zinc-900 rounded p-2.5">
+                          <span className="text-zinc-500 block mb-0.5 uppercase text-[9px] font-semibold">Execution Delay</span>
+                          <span className="text-zinc-300 font-semibold">{timingAnalysis.executionDelay}</span>
+                        </div>
+                        <div className="bg-zinc-950/30 border border-zinc-900 rounded p-2.5">
+                          <span className="text-zinc-500 block mb-0.5 uppercase text-[9px] font-semibold">Dealer Response</span>
+                          <span className="text-zinc-300 font-semibold">{timingAnalysis.dealerResponseTime}</span>
+                        </div>
+                        <div className="bg-zinc-950/30 border border-zinc-900 rounded p-2.5">
+                          <span className="text-zinc-500 block mb-0.5 uppercase text-[9px] font-semibold">Quality Tier</span>
+                          <span className="text-zinc-300 font-semibold">{timingAnalysis.quality}</span>
+                        </div>
+                      </div>
+                    </div>
+                  );
+                };
+
+                const renderPositionLifecycle = () => {
+                  if (Array.isArray(positionLifecycle)) {
+                    return (
+                      <ul className="list-disc list-inside space-y-1.5 pl-1.5 text-zinc-300">
+                        {positionLifecycle.map((step: string, idx: number) => (
+                          <li key={idx} className="leading-relaxed text-[11px]">{step}</li>
+                        ))}
+                      </ul>
+                    );
+                  }
+                  return <p className="leading-relaxed whitespace-pre-line text-[11px]">{positionLifecycle}</p>;
+                };
+
+                const renderRejectionAnalysis = () => {
+                  if (!rejectionAnalysis || !rejectionAnalysis.isRejected) return null;
+                  return (
+                    <div className="bg-red-950/5 border border-red-950 rounded-xl p-5 space-y-3 text-left">
+                      <h4 className="text-[10px] uppercase font-bold text-red-400 border-b border-red-950/30 pb-1.5 flex items-center gap-1.5"><AlertTriangle className="h-3.5 w-3.5 text-red-500" /> Rejection Analysis</h4>
+                      <div className="grid gap-4 sm:grid-cols-4 font-mono text-[10px]">
+                        <div>
+                          <span className="text-zinc-500 block uppercase text-[9px] mb-0.5">Stage</span>
+                          <span className="text-zinc-300 font-semibold">{rejectionAnalysis.stage || 'N/A'}</span>
+                        </div>
+                        <div>
+                          <span className="text-zinc-550 block uppercase text-[9px] mb-0.5">Reason Code</span>
+                          <span className="text-zinc-350 font-semibold">{rejectionAnalysis.reason || 'N/A'}</span>
+                        </div>
+                        <div>
+                          <span className="text-zinc-500 block uppercase text-[9px] mb-0.5">Retcode</span>
+                          <span className="text-zinc-300 font-semibold">{rejectionAnalysis.retcode ? `#${rejectionAnalysis.retcode}` : 'N/A'}</span>
+                        </div>
+                        <div>
+                          <span className="text-zinc-500 block uppercase text-[9px] mb-0.5">Source Component</span>
+                          <span className="text-zinc-300 font-semibold">{rejectionAnalysis.source || 'N/A'}</span>
+                        </div>
+                      </div>
+                      {rejectionAnalysis.explanation && (
+                        <p className="text-zinc-400 mt-2 leading-relaxed italic border-t border-zinc-900/50 pt-2 text-[11px]">{rejectionAnalysis.explanation}</p>
+                      )}
+                    </div>
+                  );
+                };
+
+                const renderEvidence = () => {
+                  if (!evidence || evidence.length === 0) return null;
+                  return (
+                    <div className="bg-zinc-900/10 border border-zinc-900 rounded-xl p-5 space-y-3 text-left">
+                      <h4 className="text-[10px] uppercase font-bold text-zinc-500 border-b border-zinc-900 pb-1.5 flex items-center gap-1.5"><Database className="h-3.5 w-3.5" /> Evidence References</h4>
+                      <div className="space-y-2 max-h-[220px] overflow-y-auto pr-1 font-mono">
+                        {evidence.map((ev: any, idx: number) => (
+                          <div key={idx} className="bg-zinc-950/20 border border-zinc-900/50 rounded p-2.5 flex items-start justify-between gap-4 hover:border-zinc-800 transition">
+                            <div className="space-y-1">
+                              <p className="text-[11px] text-zinc-300 font-medium font-sans">{ev.explanation || ev.claim}</p>
+                              <div className="flex items-center gap-3 text-[9px] text-zinc-500 font-mono">
+                                <span>Event: {ev.event || ev.eventType}</span>
+                                {ev.timestamp && <span>Time: {ev.timestamp}</span>}
+                              </div>
+                            </div>
+                          </div>
+                        ))}
+                      </div>
+                    </div>
+                  );
+                };
+
+                return (
+                  <div className="space-y-6 text-xs text-zinc-300 font-sans max-w-3xl text-left animate-fade-in">
+                    {/* Outcome & Summary Section */}
+                    <div className="flex flex-col gap-4 bg-zinc-900/10 border border-zinc-900 rounded-xl p-5">
+                      <div className="flex items-center justify-between border-b border-zinc-900 pb-3">
+                        <span className="text-[10px] uppercase font-bold text-zinc-400 tracking-wider">Compliance Trade Outcome</span>
+                        <div className="flex items-center gap-2">
+                          <span className="text-[9px] font-mono text-zinc-500">Confidence: {confidence}</span>
+                          <span className={`inline-block border px-2.5 py-0.5 rounded text-[10px] font-bold ${getOutcomeBadgeClass(status)}`}>
+                            {status}
+                          </span>
+                        </div>
+                      </div>
+                      <div>
+                        <h4 className="text-[10px] uppercase font-bold text-zinc-500 mb-1">Executive Summary</h4>
+                        <p className="text-zinc-100 font-medium leading-relaxed font-mono">{executiveSummary}</p>
+                      </div>
+                    </div>
+
+                    {/* Operational Details Sections */}
+                    <div className="grid gap-6 md:grid-cols-2">
+                      <div className="bg-zinc-900/10 border border-zinc-900 rounded-xl p-5 space-y-3">
+                        <h4 className="text-[10px] uppercase font-bold text-zinc-550 border-b border-zinc-900 pb-1.5 flex items-center gap-1.5"><FileText className="h-3.5 w-3.5" /> What Happened</h4>
+                        {renderWhatHappened()}
+                      </div>
+
+                      <div className="bg-zinc-900/10 border border-zinc-900 rounded-xl p-5 space-y-3">
+                        <h4 className="text-[10px] uppercase font-bold text-zinc-550 border-b border-zinc-900 pb-1.5 flex items-center gap-1.5"><TrendingUp className="h-3.5 w-3.5" /> Slippage Analysis</h4>
+                        {renderSlippageAnalysis()}
+                      </div>
+
+                      <div className="bg-zinc-900/10 border border-zinc-900 rounded-xl p-5 space-y-3">
+                        <h4 className="text-[10px] uppercase font-bold text-zinc-550 border-b border-zinc-900 pb-1.5 flex items-center gap-1.5"><Clock className="h-3.5 w-3.5" /> Timing & Latency Analysis</h4>
+                        {renderTimingAnalysis()}
+                      </div>
+
+                      <div className="bg-zinc-900/10 border border-zinc-900 rounded-xl p-5 space-y-3">
+                        <h4 className="text-[10px] uppercase font-bold text-zinc-550 border-b border-zinc-900 pb-1.5 flex items-center gap-1.5"><Activity className="h-3.5 w-3.5" /> Position Lifecycle Analysis</h4>
+                        {renderPositionLifecycle()}
+                      </div>
+                    </div>
+
+                    {/* Execution Details */}
+                    {parsed.executionAnalysis && (
+                      <div className="bg-zinc-900/10 border border-zinc-900 rounded-xl p-5 space-y-3">
+                        <h4 className="text-[10px] uppercase font-bold text-zinc-550 border-b border-zinc-900 pb-1.5 flex items-center gap-1.5"><FileText className="h-3.5 w-3.5" /> Leg Execution Details</h4>
+                        {renderExecutionAnalysis()}
+                      </div>
+                    )}
+
+                    {/* Rejection Analysis Block */}
+                    {renderRejectionAnalysis()}
+
+                    {/* Warnings & Anomalies Block */}
+                    {anomalies && anomalies.length > 0 && (
+                      <div className="bg-amber-950/5 border border-amber-950/65 rounded-xl p-5 space-y-2 text-left">
+                        <h4 className="text-[10px] uppercase font-bold text-amber-400 flex items-center gap-1.5"><AlertCircle className="h-3.5 w-3.5" /> Flagged Investigations & Observations</h4>
+                        <ul className="list-disc list-inside space-y-1 text-zinc-400 pl-1.5">
+                          {anomalies.map((anom: string, idx: number) => (
+                            <li key={idx} className="leading-relaxed text-[11px]">{anom}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+
+                    {/* Evidence Logs Tracing Reference Block */}
+                    {renderEvidence()}
+
+                    {/* Limitations Section */}
+                    {limitations && limitations.length > 0 && (
+                      <div className="bg-zinc-900/5 border border-zinc-900/40 rounded-xl p-5 space-y-2 text-left">
+                        <h4 className="text-[10px] uppercase font-bold text-zinc-550">Logs Integrity & Limitations</h4>
+                        <ul className="list-disc list-inside space-y-1 text-zinc-500 pl-1">
+                          {limitations.map((limit: string, idx: number) => (
+                            <li key={idx} className="leading-relaxed text-[11px]">{limit}</li>
+                          ))}
+                        </ul>
+                      </div>
+                    )}
+                  </div>
+                );
+              })() : (
+                <div className="py-16 text-center space-y-5 animate-fade-in">
+                  <FileText className="mx-auto h-8 w-8 text-zinc-700 animate-pulse" />
+                  <div className="space-y-1">
+                    <h4 className="text-sm font-semibold text-zinc-200">AI Audit Report</h4>
+                    <p className="text-xs text-zinc-400 font-medium">
+                      No AI investigation has been generated for this trade yet.
+                    </p>
+                    <p className="text-[11px] text-zinc-500 max-w-sm mx-auto">
+                      Generate an AI Audit Report to analyze the MT5 logs and explain what happened.
                     </p>
                   </div>
                   <button
                     onClick={() => analyzeMutation.mutate()}
                     disabled={analyzeMutation.isPending}
-                    className="rounded-lg bg-zinc-100 px-3.5 py-2 text-xs font-semibold text-zinc-950 hover:bg-zinc-200 active:bg-zinc-300 transition"
+                    className="rounded-lg bg-zinc-100 px-4 py-2 text-xs font-semibold text-zinc-950 hover:bg-zinc-200 active:bg-zinc-300 transition shadow"
                   >
-                    {analyzeMutation.isPending ? 'Generating Report...' : 'Run AI Compliance Check'}
+                    {analyzeMutation.isPending ? 'Generating Investigation...' : 'Generate AI Audit Report'}
                   </button>
                 </div>
               )}
@@ -968,13 +1315,26 @@ export default function InvestigationWorkspacePage() {
 
               {/* Message History Feed */}
               <div className="flex-1 overflow-y-auto p-4 space-y-4 text-xs font-sans">
-                {!latestAiReport ? (
-                  <div className="h-full flex items-center justify-center text-zinc-600 text-center p-6">
-                    Analyze the transaction first to unlock follow-up chat support.
-                  </div>
-                ) : chatMessages.length === 0 ? (
-                  <div className="h-full flex items-center justify-center text-zinc-500 text-center p-6 italic">
-                    Ask follow-up operations questions (e.g. "why did dealer #5 accept gold at 2352?")
+                {chatMessages.length === 0 ? (
+                  <div className="h-full flex flex-col justify-center items-center text-zinc-500 p-6 space-y-4">
+                    <p className="text-center italic">
+                      Ask a question about this trade...
+                    </p>
+                    <div className="w-full max-w-sm grid gap-2">
+                      {getSuggestedQuestions().map((q, idx) => (
+                        <button
+                          key={idx}
+                          type="button"
+                          onClick={() => {
+                            setChatMessages((prev) => [...prev, { role: 'user', content: q }]);
+                            chatMutation.mutate(q);
+                          }}
+                          className="text-left w-full rounded-lg border border-indigo-900/30 bg-indigo-950/20 px-3 py-2 text-[10px] text-zinc-300 hover:bg-indigo-950/40 hover:text-zinc-150 transition"
+                        >
+                          {q}
+                        </button>
+                      ))}
+                    </div>
                   </div>
                 ) : (
                   chatMessages.map((msg, idx) => (
@@ -1008,13 +1368,13 @@ export default function InvestigationWorkspacePage() {
                   type="text"
                   value={chatInput}
                   onChange={(e) => setChatInput(e.target.value)}
-                  placeholder="Ask a compliance question..."
-                  disabled={!latestAiReport || chatMutation.isPending}
+                  placeholder="Ask a question about this trade..."
+                  disabled={chatMutation.isPending}
                   className="flex-1 rounded-lg border border-zinc-900 bg-zinc-950/50 px-3 py-2 text-xs text-zinc-200 placeholder-zinc-700 outline-none focus:border-zinc-800 transition disabled:opacity-50"
                 />
                 <button
                   type="submit"
-                  disabled={!chatInput.trim() || !latestAiReport || chatMutation.isPending}
+                  disabled={!chatInput.trim() || chatMutation.isPending}
                   className="flex h-8 w-8 items-center justify-center rounded-lg bg-zinc-100 text-zinc-950 hover:bg-zinc-200 active:bg-zinc-300 transition disabled:opacity-50 shrink-0"
                 >
                   <Send className="h-3.5 w-3.5" />

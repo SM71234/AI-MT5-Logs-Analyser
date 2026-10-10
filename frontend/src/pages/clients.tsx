@@ -667,8 +667,14 @@ export default function ClientsPage() {
                                       ? 'text-emerald-400 font-semibold' 
                                       : 'text-zinc-500'
                                   }>
-                                    {trade.executionAnalysis.netSlippage.slippageType === 'Adverse' ? '-' : trade.executionAnalysis.netSlippage.slippageType === 'Favorable' ? '+' : ''}
-                                    {trade.executionAnalysis.netSlippage.slippagePoints} pts {trade.executionAnalysis.netSlippage.slippageType === 'Adverse' ? 'Adverse' : trade.executionAnalysis.netSlippage.slippageType === 'Favorable' ? 'Favorable' : 'Zero'}
+                                    {trade.executionAnalysis.netSlippage.slippagePoints !== null && trade.executionAnalysis.netSlippage.slippagePoints !== undefined ? (
+                                      <>
+                                        {trade.executionAnalysis.netSlippage.slippageType === 'Adverse' ? '-' : trade.executionAnalysis.netSlippage.slippageType === 'Favorable' ? '+' : ''}
+                                        {trade.executionAnalysis.netSlippage.slippagePoints} pts {trade.executionAnalysis.netSlippage.slippageType === 'Adverse' ? 'Adverse' : trade.executionAnalysis.netSlippage.slippageType === 'Favorable' ? 'Favorable' : 'Zero'}
+                                      </>
+                                    ) : (
+                                      <span>{trade.executionAnalysis.netSlippage.slippageType === 'NOT_OBSERVABLE' ? 'N/A' : (trade.executionAnalysis.netSlippage.slippageType || 'N/A')}</span>
+                                    )}
                                   </span>
                                   {trade.executionAnalysis.exitExecution ? (
                                     <span className="text-[9px] text-zinc-500 font-normal">

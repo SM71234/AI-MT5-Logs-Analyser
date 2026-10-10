@@ -43,7 +43,7 @@ describe('NormalizationEngine', () => {
     const result = engine.normalize(raw);
 
     expect(result).not.toBeNull();
-    expect(result!.eventType).toBe('EXECUTION_RESPONSE');
+    expect(result!.eventType).toBe('REQUOTED');
     expect(result!.metadata.dealerId).toBe('8');
     expect(result!.metadata.symbol).toBe('GBPUSD');
     expect(result!.metadata.priceRequested).toBe(1.28400);
@@ -60,5 +60,29 @@ describe('NormalizationEngine', () => {
     expect(result!.metadata.ticket).toBe('5001');
     expect(result!.metadata.symbol).toBe('EURUSD');
     expect(result!.metadata.priceExecuted).toBe(1.10200);
+  });
+
+  it('should normalize ROUTED messages with dot timestamps and rules', () => {
+    const raw = "2026.08.14 15:34:04.800 '259713': request transferred to dealers, rule 'Dealing Brokeree' (for '259713' sell 0.01 XAUUSD.p at 4382.81, close #7100172)";
+    const result = engine.normalize(raw);
+
+    expect(result).not.toBeNull();
+    expect(result!.eventType).toBe('ROUTED');
+    expect(result!.login).toBe('259713');
+  });
+
+  it('should normalize execution request from dealer/bridge perspective (Pattern 32)', () => {
+    const raw = "2026-08-14T15:34:05Z [Trade] '1085': request from '259713' (for '259713' sell 0.01 XAUUSD.p at 4382.81, close #7100172)";
+    const result = engine.normalize(raw);
+
+    expect(result).not.toBeNull();
+    expect(result!.eventType).toBe('EXECUTION_REQUEST');
+    expect(result!.login).toBe('259713');
+    expect(result!.metadata.action).toBe('SELL');
+    expect(result!.metadata.volume).toBe(0.01);
+    expect(result!.metadata.symbol).toBe('XAUUSD.p');
+    expect(result!.metadata.priceRequested).toBe(4382.81);
+    expect(result!.metadata.positionId).toBe('7100172');
+    expect(result!.metadata.requestId).toBe('1085');
   });
 });

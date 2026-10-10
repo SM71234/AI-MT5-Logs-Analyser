@@ -8,6 +8,7 @@
     "frontend"
   ],
   "scripts": {
+    "start": "node start.js",
     "backend:dev": "npm run start:dev -w backend",
     "backend:build": "npm run build -w backend",
     "frontend:dev": "npm run dev -w frontend",
